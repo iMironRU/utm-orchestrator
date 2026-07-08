@@ -1,36 +1,27 @@
 package ru.imironru.utm.agent;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.io.ByteArrayInputStream;
 
 /**
- * Фильтрует список PKCS#11 слотов, оставляя только слот с нужным FSRAR-ID.
+ * Фильтрует PKCS#11 слоты по FSRAR-ID сертификата.
  *
- * Алгоритм:
- *  1. Для каждого слота открываем сессию (C_OpenSession без авторизации — достаточно для чтения).
- *  2. Перечисляем объекты CKO_CERTIFICATE в слоте.
- *  3. Для каждого сертификата парсим X.509, ищем OID 1.2.643.5.1.10.7.1 (FSRAR-ID).
- *  4. Если FSRAR-ID совпадает с целевым — возвращаем [slot].
- *  5. Если ни один слот не подошёл — возвращаем null (сигнал «использовать оригинал»).
- *
- * Работает через reflection на sun.security.pkcs11.wrapper.PKCS11 — именно тот
- * класс который инструментируется, поэтому ClassLoader тот же.
+ * Точка входа из SlotSelectorAdvice: findByFsrarId(cryptographer, defaultSlot).
+ * Получает экземпляр sun.security.pkcs11.wrapper.PKCS11 из полей SunCryptographer
+ * через reflection, затем перебирает слоты и читает X.509 сертификаты.
  */
 public class SlotFilter {
 
     // OID поля FSRAR-ID в сертификате КЭП ЕГАИС
     private static final String FSRAR_ID_OID = "1.2.643.5.1.10.7.1";
 
-    // CKO_CERTIFICATE = 1
     private static final long CKO_CERTIFICATE = 1L;
-    // CKA_CLASS = 0, CKA_VALUE = 17
-    private static final long CKA_CLASS = 0L;
-    private static final long CKA_VALUE = 17L;
-
-    // CKF_SERIAL_SESSION = 4, CKF_RW_SESSION = 2
-    private static final long SESSION_FLAGS = 4L;
+    private static final long CKA_CLASS       = 0L;
+    private static final long CKA_VALUE       = 17L;
+    private static final long SESSION_FLAGS   = 4L; // CKF_SERIAL_SESSION
 
     private static volatile String targetFsrarId;
 
@@ -40,73 +31,119 @@ public class SlotFilter {
     }
 
     /**
-     * @param pkcs11  экземпляр sun.security.pkcs11.wrapper.PKCS11
-     * @param slots   оригинальный список слотов
-     * @return отфильтрованный массив (один слот) или null при ошибке/не найдено
+     * Вызывается из SlotSelectorAdvice после SunCryptographer.c(String).
+     *
+     * @param cryptographer экземпляр SunCryptographer
+     * @param defaultSlot   слот, выбранный оригинальным алгоритмом UTM
+     * @return слот с нужным FSRAR-ID, или defaultSlot если не найден
      */
-    public static long[] filter(Object pkcs11, long[] slots) {
-        if (targetFsrarId == null || slots == null || slots.length == 0) return null;
+    public static long findByFsrarId(Object cryptographer, long defaultSlot) {
+        if (targetFsrarId == null || targetFsrarId.isEmpty()) return defaultSlot;
+
+        AgentLogger.info("SunCryptographer.c вызван, defaultSlot=" + defaultSlot
+                + ", ищем fsrarId=" + targetFsrarId);
+
+        Object pkcs11 = findPkcs11Instance(cryptographer);
+        if (pkcs11 == null) {
+            AgentLogger.warn("Поле PKCS11 не найдено в " + cryptographer.getClass().getName());
+            return defaultSlot;
+        }
+
+        try {
+            Method getSlotList = findMethod(pkcs11.getClass(), "C_GetSlotList", boolean.class);
+            long[] slots = (long[]) getSlotList.invoke(pkcs11, Boolean.TRUE);
+            AgentLogger.info("C_GetSlotList: " + (slots != null ? slots.length : 0) + " слотов");
+            if (slots == null || slots.length == 0) return defaultSlot;
+
+            long[] result = scanSlots(pkcs11, slots);
+            if (result != null && result.length > 0) return result[0];
+        } catch (Throwable t) {
+            AgentLogger.error("findByFsrarId: " + t);
+        }
+        return defaultSlot;
+    }
+
+    /** Ищет поле типа *PKCS11* в иерархии классов объекта. */
+    private static Object findPkcs11Instance(Object obj) {
+        Class<?> cls = obj.getClass();
+        while (cls != null && cls != Object.class) {
+            for (Field f : cls.getDeclaredFields()) {
+                if (f.getType().getName().contains("PKCS11")) {
+                    f.setAccessible(true);
+                    try { return f.get(obj); } catch (Exception ignored) {}
+                }
+            }
+            cls = cls.getSuperclass();
+        }
+        return null;
+    }
+
+    /**
+     * Перебирает слоты: открывает сессию, читает CKO_CERTIFICATE, парсит X.509,
+     * ищет OID FSRAR_ID_OID, возвращает массив из одного слота при совпадении.
+     */
+    private static long[] scanSlots(Object pkcs11, long[] slots) {
         if (slots.length == 1) {
-            // Единственный слот — нет смысла фильтровать, логируем только
-            AgentLogger.info("Один слот в системе, фильтрация пропущена.");
+            AgentLogger.info("Один слот — фильтрация пропущена.");
             return null;
         }
 
         try {
             Class<?> pkcs11Class = pkcs11.getClass();
-
-            // Ищем методы через reflection
-            Method openSession  = findMethod(pkcs11Class, "C_OpenSession",  long.class, long.class, Object.class, Object.class);
+            Method openSession  = findMethod(pkcs11Class, "C_OpenSession",
+                                             long.class, long.class, Object.class, Object.class);
             Method closeSession = findMethod(pkcs11Class, "C_CloseSession", long.class);
-            Method findInit     = findMethod(pkcs11Class, "C_FindObjectsInit", long.class, Object[].class);
-            Method findObjects  = findMethod(pkcs11Class, "C_FindObjects",  long.class, int.class);
+            Method findInit     = findMethod(pkcs11Class, "C_FindObjectsInit",
+                                             long.class, Object[].class);
+            Method findObjects  = findMethod(pkcs11Class, "C_FindObjects", long.class, int.class);
             Method findFinal    = findMethod(pkcs11Class, "C_FindObjectsFinal", long.class);
-            Method getAttrVal   = findMethod(pkcs11Class, "C_GetAttributeValue", long.class, long.class, Object[].class);
+            Method getAttrVal   = findMethod(pkcs11Class, "C_GetAttributeValue",
+                                             long.class, long.class, Object[].class);
 
-            // Классы CK_ATTRIBUTE нужны для передачи атрибутов
             Class<?> ckAttrClass = Class.forName(
                 "sun.security.pkcs11.wrapper.CK_ATTRIBUTE",
                 false, pkcs11Class.getClassLoader()
             );
-            java.lang.reflect.Constructor<?> ckAttrCtor2 =
+            java.lang.reflect.Constructor<?> ctor2 =
                 ckAttrClass.getDeclaredConstructor(long.class, Object.class);
-            java.lang.reflect.Constructor<?> ckAttrCtor1 =
+            java.lang.reflect.Constructor<?> ctor1 =
                 ckAttrClass.getDeclaredConstructor(long.class);
-            ckAttrCtor2.setAccessible(true);
-            ckAttrCtor1.setAccessible(true);
-            java.lang.reflect.Field pValueField = ckAttrClass.getDeclaredField("pValue");
+            ctor2.setAccessible(true);
+            ctor1.setAccessible(true);
+            Field pValueField = ckAttrClass.getDeclaredField("pValue");
             pValueField.setAccessible(true);
 
             for (long slot : slots) {
                 long session = -1L;
                 try {
-                    // Открываем read-only сессию (SESSION_FLAGS=4 = CKF_SERIAL_SESSION без CKF_RW)
                     session = (Long) openSession.invoke(pkcs11, slot, SESSION_FLAGS, null, null);
-
-                    // Ищем объекты CKO_CERTIFICATE
-                    Object filterAttr = ckAttrCtor2.newInstance(CKA_CLASS, CKO_CERTIFICATE);
+                    Object filterAttr = ctor2.newInstance(CKA_CLASS, CKO_CERTIFICATE);
                     findInit.invoke(pkcs11, session, new Object[]{filterAttr});
-                    long[] certHandles = (long[]) findObjects.invoke(pkcs11, session, 64);
+                    long[] handles = (long[]) findObjects.invoke(pkcs11, session, 64);
                     findFinal.invoke(pkcs11, session);
 
-                    if (certHandles == null || certHandles.length == 0) continue;
+                    if (handles == null || handles.length == 0) {
+                        AgentLogger.info("slot=" + slot + " сертификатов нет");
+                        continue;
+                    }
 
-                    for (long handle : certHandles) {
-                        Object valueAttr = ckAttrCtor1.newInstance(CKA_VALUE);
-                        getAttrVal.invoke(pkcs11, session, handle, new Object[]{valueAttr});
-                        byte[] derBytes = (byte[]) pValueField.get(valueAttr);
-                        if (derBytes == null) continue;
+                    for (long handle : handles) {
+                        Object valAttr = ctor1.newInstance(CKA_VALUE);
+                        getAttrVal.invoke(pkcs11, session, handle, new Object[]{valAttr});
+                        byte[] der = (byte[]) pValueField.get(valAttr);
+                        if (der == null) continue;
 
-                        String fsrarId = extractFsrarId(derBytes);
-                        AgentLogger.info("slot=" + slot + " cert fsrarId=" + (fsrarId != null ? fsrarId : "<нет>"));
+                        String fsrarId = extractFsrarId(der);
+                        AgentLogger.info("slot=" + slot + " cert fsrarId="
+                                + (fsrarId != null ? fsrarId : "<нет>"));
 
                         if (targetFsrarId.equalsIgnoreCase(fsrarId)) {
-                            AgentLogger.info("Совпадение! Оставляем только слот " + slot);
+                            AgentLogger.info("Совпадение! Выбираем слот " + slot);
                             return new long[]{slot};
                         }
                     }
                 } catch (Exception e) {
-                    AgentLogger.warn("Ошибка при проверке слота " + slot + ": " + e.getMessage());
+                    AgentLogger.warn("Ошибка при чтении слота " + slot + ": " + e.getMessage());
                 } finally {
                     if (session >= 0) {
                         try { closeSession.invoke(pkcs11, session); } catch (Exception ignored) {}
@@ -114,27 +151,21 @@ public class SlotFilter {
                 }
             }
 
-            AgentLogger.warn("Слот с fsrarId=" + targetFsrarId + " не найден среди " + slots.length + " слотов. Fallback на оригинальный список.");
-            return null;
-
+            AgentLogger.warn("fsrarId=" + targetFsrarId + " не найден среди "
+                    + slots.length + " слотов. Fallback на defaultSlot.");
         } catch (Throwable t) {
-            AgentLogger.error("Критическая ошибка SlotFilter: " + t.getMessage());
-            return null;
+            AgentLogger.error("scanSlots: " + t);
         }
+        return null;
     }
 
-    /**
-     * Извлекает значение атрибута с OID FSRAR_ID_OID из DER-закодированного X.509 сертификата.
-     * Возвращает строку вида "030000123456" или null если атрибут отсутствует.
-     */
+    /** Извлекает FSRAR-ID (OID 1.2.643.5.1.10.7.1) из DER X.509 сертификата. */
     static String extractFsrarId(byte[] derCert) {
         try {
             CertificateFactory cf = CertificateFactory.getInstance("X.509");
             X509Certificate cert = (X509Certificate) cf.generateCertificate(
                 new ByteArrayInputStream(derCert)
             );
-            // Subject: OID может лежать в Subject Alternative Name extension или в Subject DN
-            // В КЭП ЕГАИС FSRAR-ID обычно в SubjectDN как OID 1.2.643.5.1.10.7.1
             String dn = cert.getSubjectX500Principal().getName("RFC2253");
             return extractOidValue(dn, FSRAR_ID_OID);
         } catch (Exception e) {
@@ -143,72 +174,46 @@ public class SlotFilter {
         }
     }
 
-    /**
-     * Ищет значение OID в строке RFC2253 SubjectDN.
-     * Формат: "OID.1.2.3=value,CN=..."
-     */
     private static String extractOidValue(String dn, String oid) {
-        // RFC2253: OID.1.2.643.5.1.10.7.1=#<hex> или OID.x=value
-        String searchKey = "OID." + oid + "=";
-        int idx = dn.indexOf(searchKey);
-        if (idx < 0) {
-            // Иногда пишется без OID. prefix
-            searchKey = oid + "=";
-            idx = dn.indexOf(searchKey);
-        }
+        String key = "OID." + oid + "=";
+        int idx = dn.indexOf(key);
+        if (idx < 0) { key = oid + "="; idx = dn.indexOf(key); }
         if (idx < 0) return null;
-        int start = idx + searchKey.length();
+        int start = idx + key.length();
         int end = dn.indexOf(',', start);
         String raw = (end < 0 ? dn.substring(start) : dn.substring(start, end)).trim();
-        // Если значение в hex (#AABBCC...) — декодируем UTF-8 строку
-        if (raw.startsWith("#")) {
-            return decodeHexString(raw.substring(1));
-        }
-        return raw;
+        return raw.startsWith("#") ? decodeHexString(raw.substring(1)) : raw;
     }
 
-    /**
-     * Декодирует DER-закодированную строку из hex в читаемый вид.
-     * Формат ASN.1: tag(1) + len(1+) + value bytes.
-     */
     private static String decodeHexString(String hex) {
         try {
             byte[] bytes = hexToBytes(hex);
-            // Пропускаем ASN.1 tag и length, берём value
             if (bytes.length < 2) return hex;
             int len = bytes[1] & 0xFF;
-            int valueOffset = 2;
+            int off = 2;
             if (len > 127) {
-                int lenBytes = len & 0x7F;
-                valueOffset = 2 + lenBytes;
-                len = 0;
-                for (int i = 0; i < lenBytes; i++) {
-                    len = (len << 8) | (bytes[2 + i] & 0xFF);
-                }
+                int lb = len & 0x7F; off = 2 + lb; len = 0;
+                for (int i = 0; i < lb; i++) len = (len << 8) | (bytes[2 + i] & 0xFF);
             }
-            return new String(bytes, valueOffset, Math.min(len, bytes.length - valueOffset), "UTF-8");
-        } catch (Exception e) {
-            return hex;
-        }
+            return new String(bytes, off, Math.min(len, bytes.length - off), "UTF-8");
+        } catch (Exception e) { return hex; }
     }
 
     private static byte[] hexToBytes(String hex) {
-        int len = hex.length();
-        byte[] data = new byte[len / 2];
-        for (int i = 0; i < len; i += 2) {
-            data[i / 2] = (byte) ((Character.digit(hex.charAt(i), 16) << 4)
-                                 + Character.digit(hex.charAt(i + 1), 16));
-        }
+        byte[] data = new byte[hex.length() / 2];
+        for (int i = 0; i < data.length; i++)
+            data[i] = (byte) ((Character.digit(hex.charAt(i * 2), 16) << 4)
+                             + Character.digit(hex.charAt(i * 2 + 1), 16));
         return data;
     }
 
-    private static Method findMethod(Class<?> cls, String name, Class<?>... params) throws NoSuchMethodException {
+    private static Method findMethod(Class<?> cls, String name, Class<?>... params)
+            throws NoSuchMethodException {
         try {
             Method m = cls.getDeclaredMethod(name, params);
             m.setAccessible(true);
             return m;
         } catch (NoSuchMethodException e) {
-            // Попробуем в суперклассе
             Method m = cls.getMethod(name, params);
             m.setAccessible(true);
             return m;

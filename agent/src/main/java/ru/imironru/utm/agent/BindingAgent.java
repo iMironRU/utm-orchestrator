@@ -5,7 +5,11 @@ import net.bytebuddy.asm.Advice;
 import net.bytebuddy.matcher.ElementMatchers;
 import net.bytebuddy.utility.JavaModule;
 
+import java.io.File;
+import java.io.IOException;
 import java.lang.instrument.Instrumentation;
+import java.net.URISyntaxException;
+import java.util.jar.JarFile;
 
 /**
  * Java-агент для cert-driven привязки PKCS#11 слота в UTM ЕГАИС.
@@ -13,9 +17,10 @@ import java.lang.instrument.Instrumentation;
  * Использование (в install.bat UTM):
  *   -javaagent:utm-binding-agent.jar=fsrarId=030000123456
  *
- * При загрузке перехватывает sun.security.pkcs11.wrapper.PKCS11.C_GetSlotList —
- * после оригинального вызова фильтрует список слотов, оставляя только тот,
- * чей токен несёт сертификат с указанным FSRAR-ID.
+ * Перехватывает ru.centerinform.transport.crypto.SunCryptographer.c(String) —
+ * Java-метод UTM который выбирает PKCS#11 слот по модели токена.
+ * После оригинального выбора проверяет FSRAR-ID сертификата на слоте
+ * и при необходимости подменяет на слот с нужным сертификатом.
  */
 public class BindingAgent {
 
@@ -28,6 +33,17 @@ public class BindingAgent {
     }
 
     private static void start(String agentArgs, Instrumentation inst) {
+        // Добавляем агент в bootstrap ClassLoader, чтобы наши классы были видны
+        // из контекста класслоадера UTM
+        try {
+            File jar = new File(
+                BindingAgent.class.getProtectionDomain().getCodeSource().getLocation().toURI()
+            );
+            inst.appendToBootstrapClassLoaderSearch(new JarFile(jar));
+        } catch (URISyntaxException | IOException e) {
+            System.err.println("[utm-agent] bootstrap append failed: " + e.getMessage());
+        }
+
         AgentConfig config = AgentConfig.parse(agentArgs);
         AgentLogger.init(config);
 
@@ -39,7 +55,8 @@ public class BindingAgent {
         AgentLogger.info("Старт агента: fsrarId=" + config.getFsrarId());
         SlotFilter.setTarget(config.getFsrarId());
 
-        // Инструментируем sun.security.pkcs11.wrapper.PKCS11
+        // Инструментируем SunCryptographer.c(String) — Java-метод выбора PKCS#11 слота.
+        // (C_GetSlotList — native метод, инструментировать нельзя напрямую)
         new AgentBuilder.Default()
             .with(AgentBuilder.RedefinitionStrategy.RETRANSFORMATION)
             .with(AgentBuilder.TypeStrategy.Default.REDEFINE)
@@ -50,15 +67,17 @@ public class BindingAgent {
                     AgentLogger.warn("Не удалось инструментировать " + typeName + ": " + t.getMessage());
                 }
             })
-            .type(ElementMatchers.named("sun.security.pkcs11.wrapper.PKCS11"))
+            .type(ElementMatchers.named("ru.centerinform.transport.crypto.SunCryptographer"))
             .transform((builder, type, cl, module, domain) ->
                 builder.visit(
-                    Advice.to(SlotListAdvice.class)
-                          .on(ElementMatchers.named("C_GetSlotList"))
+                    Advice.to(SlotSelectorAdvice.class)
+                          .on(ElementMatchers.named("c")
+                              .and(ElementMatchers.returns(long.class))
+                              .and(ElementMatchers.takesArguments(String.class)))
                 )
             )
             .installOn(inst);
 
-        AgentLogger.info("Инструментация PKCS11.C_GetSlotList установлена.");
+        AgentLogger.info("Инструментация SunCryptographer.c(String) установлена.");
     }
 }
