@@ -30,6 +30,15 @@
             <version>${bytebuddy.version}</version>
         </dependency>
 
+        <!-- Прямой доступ к PKCS#11 (JNA) — обходит баг автоматического
+             двухфазного C_GetAttributeValue в JDK-обёртке sun.security.pkcs11
+             для драйвера Rutoken (см. SlotFilter). -->
+        <dependency>
+            <groupId>ru.rutoken</groupId>
+            <artifactId>pkcs11jna</artifactId>
+            <version>4.3.0</version>
+        </dependency>
+
         <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>

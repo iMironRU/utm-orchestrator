@@ -1,29 +1,50 @@
 package ru.imironru.utm.agent;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
+import com.sun.jna.Memory;
+import com.sun.jna.Native;
+import com.sun.jna.NativeLong;
+import com.sun.jna.Pointer;
+import com.sun.jna.ptr.NativeLongByReference;
+import ru.rutoken.pkcs11jna.CK_ATTRIBUTE;
+import ru.rutoken.pkcs11jna.CK_C_INITIALIZE_ARGS;
+import ru.rutoken.pkcs11jna.Pkcs11;
+import ru.rutoken.pkcs11jna.Pkcs11Constants;
+
+import java.io.ByteArrayInputStream;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
-import java.io.ByteArrayInputStream;
 
 /**
  * Фильтрует PKCS#11 слоты по FSRAR-ID сертификата.
  *
- * Точка входа из SlotSelectorAdvice: findByFsrarId(cryptographer, defaultSlot).
- * Получает экземпляр sun.security.pkcs11.wrapper.PKCS11 из полей SunCryptographer
- * через reflection, затем перебирает слоты и читает X.509 сертификаты.
+ * Открывает СВОЮ, независимую от UTM сессию к тому же драйверу Rutoken
+ * напрямую через JNA (pkcs11jna), а не через reflection в JDK-обёртку
+ * sun.security.pkcs11.wrapper.PKCS11.
+ *
+ * Причина: JDK-обёртка сама решает, когда и как выделять буфер под
+ * C_GetAttributeValue (в её Java-классе CK_ATTRIBUTE нет поля длины —
+ * логика двухфазного протокола целиком спрятана в нативном коде JDK).
+ * Для этого конкретного драйвера Rutoken эта автоматика не срабатывает —
+ * pValue молча остаётся null, без исключения, независимо от логина.
+ * При ручной реализации двухфазного протокола (сначала запрос длины
+ * через pValue=NULL, потом выделение буфера и повторный запрос) поверх
+ * pkcs11jna всё читается корректно, причём БЕЗ C_Login — сертификат не
+ * секретный, и это подтверждено эмпирически на реальном токене.
+ *
+ * FSRAR-ID лежит в CN (Common Name) субъекта организационного
+ * сертификата — это подтверждается и собственным сообщением UTM
+ * ("FSRAR_ID (CN RSA сертификата) не соответствует..."). У личного
+ * сертификата сотрудника CN — ФИО, поэтому ищем среди всех найденных
+ * сертификатов тот, где CN выглядит как FSRAR-ID (12 цифр).
  */
 public class SlotFilter {
 
-    // OID поля FSRAR-ID в сертификате КЭП ЕГАИС
+    private static final String LIB_PATH = "C:\\Windows\\System32\\rtPKCS11ECP.dll";
     private static final String FSRAR_ID_OID = "1.2.643.5.1.10.7.1";
 
-    private static final long CKO_CERTIFICATE = 1L;
-    private static final long CKA_CLASS       = 0L;
-    private static final long CKA_VALUE       = 17L;
-    private static final long SESSION_FLAGS   = 4L; // CKF_SERIAL_SESSION
-
     private static volatile String targetFsrarId;
+    private static volatile Pkcs11 pkcs11;
+    private static volatile boolean initAttempted;
 
     public static void setTarget(String fsrarId) {
         targetFsrarId = fsrarId;
@@ -33,7 +54,8 @@ public class SlotFilter {
     /**
      * Вызывается из SlotSelectorAdvice после SunCryptographer.c(String).
      *
-     * @param cryptographer экземпляр SunCryptographer
+     * @param cryptographer экземпляр SunCryptographer (не используется — оставлен
+     *                      для совместимости сигнатуры с SlotSelectorAdvice)
      * @param defaultSlot   слот, выбранный оригинальным алгоритмом UTM
      * @return слот с нужным FSRAR-ID, или defaultSlot если не найден
      */
@@ -43,135 +65,172 @@ public class SlotFilter {
         AgentLogger.info("SunCryptographer.c вызван, defaultSlot=" + defaultSlot
                 + ", ищем fsrarId=" + targetFsrarId);
 
-        Object pkcs11 = findPkcs11Instance(cryptographer);
-        if (pkcs11 == null) {
-            AgentLogger.warn("Поле PKCS11 не найдено в " + cryptographer.getClass().getName());
-            return defaultSlot;
-        }
-
         try {
-            Method getSlotList = findMethod(pkcs11.getClass(), "C_GetSlotList", boolean.class);
-            long[] slots = (long[]) getSlotList.invoke(pkcs11, Boolean.TRUE);
-            AgentLogger.info("C_GetSlotList: " + (slots != null ? slots.length : 0) + " слотов");
-            if (slots == null || slots.length == 0) return defaultSlot;
+            Pkcs11 p11 = ensureInitialized();
+            if (p11 == null) return defaultSlot;
 
-            long[] result = scanSlots(pkcs11, slots);
-            if (result != null && result.length > 0) return result[0];
+            NativeLongByReference countRef = new NativeLongByReference();
+            p11.C_GetSlotList((byte) 1, null, countRef);
+            int count = countRef.getValue().intValue();
+            AgentLogger.info("C_GetSlotList: " + count + " слотов");
+            if (count == 0) return defaultSlot;
+
+            NativeLong[] slots = new NativeLong[count];
+            for (int i = 0; i < count; i++) slots[i] = new NativeLong();
+            p11.C_GetSlotList((byte) 1, slots, countRef);
+
+            if (slots.length == 1) {
+                AgentLogger.info("Один слот — фильтрация пропущена.");
+                return defaultSlot;
+            }
+
+            boolean discover = "DISCOVER".equalsIgnoreCase(targetFsrarId);
+
+            for (NativeLong slot : slots) {
+                Long match = scanSlot(p11, slot, discover);
+                if (match != null) {
+                    AgentLogger.info("Совпадение! Выбираем слот " + match);
+                    return match;
+                }
+            }
+
+            if (!discover) {
+                AgentLogger.warn("fsrarId=" + targetFsrarId + " не найден среди "
+                        + slots.length + " слотов. Fallback на defaultSlot.");
+            }
         } catch (Throwable t) {
             AgentLogger.error("findByFsrarId: " + t);
         }
         return defaultSlot;
     }
 
-    /** Ищет поле типа *PKCS11* в иерархии классов объекта. */
-    private static Object findPkcs11Instance(Object obj) {
-        Class<?> cls = obj.getClass();
-        while (cls != null && cls != Object.class) {
-            for (Field f : cls.getDeclaredFields()) {
-                if (f.getType().getName().contains("PKCS11")) {
-                    f.setAccessible(true);
-                    try { return f.get(obj); } catch (Exception ignored) {}
-                }
+    /** Загружает драйвер и один раз вызывает C_Initialize (никогда не C_Finalize —
+     *  это разрушило бы уже открытую сессию UTM в этом же процессе). */
+    private static synchronized Pkcs11 ensureInitialized() {
+        if (initAttempted) return pkcs11;
+        initAttempted = true;
+        try {
+            Pkcs11 p11 = Native.load(LIB_PATH, Pkcs11.class);
+            CK_C_INITIALIZE_ARGS args = new CK_C_INITIALIZE_ARGS();
+            args.flags = new NativeLong(Pkcs11Constants.CKF_OS_LOCKING_OK);
+            long rv = p11.C_Initialize(args).longValue();
+            if (rv != Pkcs11Constants.CKR_OK && rv != Pkcs11Constants.CKR_CRYPTOKI_ALREADY_INITIALIZED) {
+                AgentLogger.warn("C_Initialize rv=" + rv);
+                return null;
             }
-            cls = cls.getSuperclass();
+            pkcs11 = p11;
+        } catch (Throwable t) {
+            AgentLogger.error("Не удалось загрузить " + LIB_PATH + ": " + t);
         }
-        return null;
+        return pkcs11;
     }
 
-    /**
-     * Перебирает слоты: открывает сессию, читает CKO_CERTIFICATE, парсит X.509,
-     * ищет OID FSRAR_ID_OID, возвращает массив из одного слота при совпадении.
-     */
-    private static long[] scanSlots(Object pkcs11, long[] slots) {
-        if (slots.length == 1) {
-            AgentLogger.info("Один слот — фильтрация пропущена.");
+    private static Long scanSlot(Pkcs11 p11, NativeLong slot, boolean discover) {
+        NativeLongByReference sessionRef = new NativeLongByReference();
+        long rv = p11.C_OpenSession(slot, new NativeLong(Pkcs11Constants.CKF_SERIAL_SESSION),
+                null, null, sessionRef).longValue();
+        if (rv != Pkcs11Constants.CKR_OK) {
+            AgentLogger.warn("slot=" + slot.intValue() + ": C_OpenSession rv=" + rv);
             return null;
         }
-
+        NativeLong session = sessionRef.getValue();
         try {
-            Class<?> pkcs11Class = pkcs11.getClass();
-            Method openSession  = findMethod(pkcs11Class, "C_OpenSession",
-                                             long.class, long.class, Object.class, Object.class);
-            Method closeSession = findMethod(pkcs11Class, "C_CloseSession", long.class);
-            Method findInit     = findMethod(pkcs11Class, "C_FindObjectsInit",
-                                             long.class, Object[].class);
-            Method findObjects  = findMethod(pkcs11Class, "C_FindObjects", long.class, int.class);
-            Method findFinal    = findMethod(pkcs11Class, "C_FindObjectsFinal", long.class);
-            Method getAttrVal   = findMethod(pkcs11Class, "C_GetAttributeValue",
-                                             long.class, long.class, Object[].class);
+            CK_ATTRIBUTE[] filter = (CK_ATTRIBUTE[]) new CK_ATTRIBUTE().toArray(1);
+            filter[0].setAttr(new NativeLong(Pkcs11Constants.CKA_CLASS),
+                    new NativeLong(Pkcs11Constants.CKO_CERTIFICATE));
 
-            Class<?> ckAttrClass = Class.forName(
-                "sun.security.pkcs11.wrapper.CK_ATTRIBUTE",
-                false, pkcs11Class.getClassLoader()
-            );
-            java.lang.reflect.Constructor<?> ctor2 =
-                ckAttrClass.getDeclaredConstructor(long.class, Object.class);
-            java.lang.reflect.Constructor<?> ctor1 =
-                ckAttrClass.getDeclaredConstructor(long.class);
-            ctor2.setAccessible(true);
-            ctor1.setAccessible(true);
-            Field pValueField = ckAttrClass.getDeclaredField("pValue");
-            pValueField.setAccessible(true);
-
-            for (long slot : slots) {
-                long session = -1L;
-                try {
-                    session = (Long) openSession.invoke(pkcs11, slot, SESSION_FLAGS, null, null);
-                    Object filterAttr = ctor2.newInstance(CKA_CLASS, CKO_CERTIFICATE);
-                    findInit.invoke(pkcs11, session, new Object[]{filterAttr});
-                    long[] handles = (long[]) findObjects.invoke(pkcs11, session, 64);
-                    findFinal.invoke(pkcs11, session);
-
-                    if (handles == null || handles.length == 0) {
-                        AgentLogger.info("slot=" + slot + " сертификатов нет");
-                        continue;
-                    }
-
-                    for (long handle : handles) {
-                        Object valAttr = ctor1.newInstance(CKA_VALUE);
-                        getAttrVal.invoke(pkcs11, session, handle, new Object[]{valAttr});
-                        byte[] der = (byte[]) pValueField.get(valAttr);
-                        if (der == null) continue;
-
-                        String fsrarId = extractFsrarId(der);
-                        AgentLogger.info("slot=" + slot + " cert fsrarId="
-                                + (fsrarId != null ? fsrarId : "<нет>"));
-
-                        if (targetFsrarId.equalsIgnoreCase(fsrarId)) {
-                            AgentLogger.info("Совпадение! Выбираем слот " + slot);
-                            return new long[]{slot};
-                        }
-                    }
-                } catch (Exception e) {
-                    AgentLogger.warn("Ошибка при чтении слота " + slot + ": " + e.getMessage());
-                } finally {
-                    if (session >= 0) {
-                        try { closeSession.invoke(pkcs11, session); } catch (Exception ignored) {}
-                    }
-                }
+            rv = p11.C_FindObjectsInit(session, filter, new NativeLong(filter.length)).longValue();
+            if (rv != Pkcs11Constants.CKR_OK) {
+                AgentLogger.warn("slot=" + slot.intValue() + ": C_FindObjectsInit rv=" + rv);
+                return null;
             }
 
-            AgentLogger.warn("fsrarId=" + targetFsrarId + " не найден среди "
-                    + slots.length + " слотов. Fallback на defaultSlot.");
+            NativeLong[] handles = new NativeLong[16];
+            for (int i = 0; i < handles.length; i++) handles[i] = new NativeLong();
+            NativeLongByReference foundRef = new NativeLongByReference();
+            p11.C_FindObjects(session, handles, new NativeLong(handles.length), foundRef);
+            int found = foundRef.getValue().intValue();
+            p11.C_FindObjectsFinal(session);
+
+            if (found == 0) {
+                AgentLogger.info("slot=" + slot.intValue() + " сертификатов нет");
+                return null;
+            }
+
+            for (int i = 0; i < found; i++) {
+                byte[] der = readAttr(p11, session, handles[i], Pkcs11Constants.CKA_VALUE);
+                if (der == null) continue;
+
+                String fsrarId = extractFsrarId(der);
+                if (discover) {
+                    AgentLogger.info("slot=" + slot.intValue() + " cert fsrarId="
+                            + (fsrarId != null ? fsrarId : "<нет>"));
+                    continue;
+                }
+
+                if (fsrarId != null && targetFsrarId.equalsIgnoreCase(fsrarId)) {
+                    return (long) slot.intValue();
+                }
+            }
         } catch (Throwable t) {
-            AgentLogger.error("scanSlots: " + t);
+            AgentLogger.warn("Ошибка при чтении slot=" + slot.intValue() + ": " + t);
+        } finally {
+            try { p11.C_CloseSession(session); } catch (Exception ignored) {}
         }
         return null;
     }
 
-    /** Извлекает FSRAR-ID (OID 1.2.643.5.1.10.7.1) из DER X.509 сертификата. */
+    /** Двухфазный протокол C_GetAttributeValue: сначала длина, потом сами данные. */
+    private static byte[] readAttr(Pkcs11 p11, NativeLong session, NativeLong handle, long attrType) {
+        CK_ATTRIBUTE[] query = (CK_ATTRIBUTE[]) new CK_ATTRIBUTE().toArray(1);
+        query[0].type = new NativeLong(attrType);
+        query[0].pValue = Pointer.NULL;
+        query[0].ulValueLen = new NativeLong(0);
+        query[0].write();
+
+        long rv = p11.C_GetAttributeValue(session, handle, query, new NativeLong(query.length)).longValue();
+        query[0].read();
+        long len = query[0].ulValueLen.longValue();
+        if (rv != Pkcs11Constants.CKR_OK || len <= 0 || len == 0xFFFFFFFFL) return null;
+
+        Memory buf = new Memory(len);
+        CK_ATTRIBUTE[] fetch = (CK_ATTRIBUTE[]) new CK_ATTRIBUTE().toArray(1);
+        fetch[0].type = new NativeLong(attrType);
+        fetch[0].pValue = buf;
+        fetch[0].ulValueLen = new NativeLong(len);
+        fetch[0].write();
+
+        rv = p11.C_GetAttributeValue(session, handle, fetch, new NativeLong(fetch.length)).longValue();
+        if (rv != Pkcs11Constants.CKR_OK) return null;
+
+        return buf.getByteArray(0, (int) len);
+    }
+
+    /** Извлекает FSRAR-ID из DER X.509 сертификата: сперва пробует CN (реальный
+     *  формат на этих токенах), затем — OID 1.2.643.5.1.10.7.1 как fallback. */
     static String extractFsrarId(byte[] derCert) {
         try {
             CertificateFactory cf = CertificateFactory.getInstance("X.509");
-            X509Certificate cert = (X509Certificate) cf.generateCertificate(
-                new ByteArrayInputStream(derCert)
-            );
+            X509Certificate cert = (X509Certificate) cf.generateCertificate(new ByteArrayInputStream(derCert));
             String dn = cert.getSubjectX500Principal().getName("RFC2253");
+
+            String cn = extractRdnValue(dn, "CN");
+            if (cn != null && cn.matches("\\d{10,14}")) return cn;
+
             return extractOidValue(dn, FSRAR_ID_OID);
         } catch (Exception e) {
             AgentLogger.warn("Не удалось распарсить сертификат: " + e.getMessage());
             return null;
         }
+    }
+
+    private static String extractRdnValue(String dn, String rdnName) {
+        String key = rdnName + "=";
+        int idx = dn.indexOf(key);
+        if (idx < 0) return null;
+        int start = idx + key.length();
+        int end = dn.indexOf(',', start);
+        return (end < 0 ? dn.substring(start) : dn.substring(start, end)).trim();
     }
 
     private static String extractOidValue(String dn, String oid) {
@@ -205,18 +264,5 @@ public class SlotFilter {
             data[i] = (byte) ((Character.digit(hex.charAt(i * 2), 16) << 4)
                              + Character.digit(hex.charAt(i * 2 + 1), 16));
         return data;
-    }
-
-    private static Method findMethod(Class<?> cls, String name, Class<?>... params)
-            throws NoSuchMethodException {
-        try {
-            Method m = cls.getDeclaredMethod(name, params);
-            m.setAccessible(true);
-            return m;
-        } catch (NoSuchMethodException e) {
-            Method m = cls.getMethod(name, params);
-            m.setAccessible(true);
-            return m;
-        }
     }
 }

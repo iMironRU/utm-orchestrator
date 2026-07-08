@@ -5,11 +5,7 @@ import net.bytebuddy.asm.Advice;
 import net.bytebuddy.matcher.ElementMatchers;
 import net.bytebuddy.utility.JavaModule;
 
-import java.io.File;
-import java.io.IOException;
 import java.lang.instrument.Instrumentation;
-import java.net.URISyntaxException;
-import java.util.jar.JarFile;
 
 /**
  * Java-агент для cert-driven привязки PKCS#11 слота в UTM ЕГАИС.
@@ -33,17 +29,11 @@ public class BindingAgent {
     }
 
     private static void start(String agentArgs, Instrumentation inst) {
-        // Добавляем агент в bootstrap ClassLoader, чтобы наши классы были видны
-        // из контекста класслоадера UTM
-        try {
-            File jar = new File(
-                BindingAgent.class.getProtectionDomain().getCodeSource().getLocation().toURI()
-            );
-            inst.appendToBootstrapClassLoaderSearch(new JarFile(jar));
-        } catch (URISyntaxException | IOException e) {
-            System.err.println("[utm-agent] bootstrap append failed: " + e.getMessage());
-        }
-
+        // SunCryptographer грузится обычным app-classloader'ом UTM, а не bootstrap —
+        // appendToBootstrapClassLoaderSearch здесь не нужен (и ломает доступ:
+        // дублирует классы агента в bootstrap CL, из-за чего package-private
+        // вызовы между BindingAgent и остальными классами агента падают
+        // с IllegalAccessError, если они резолвятся через разные classloader'ы).
         AgentConfig config = AgentConfig.parse(agentArgs);
         AgentLogger.init(config);
 

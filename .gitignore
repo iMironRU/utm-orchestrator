@@ -1,5 +1,7 @@
 # Maven
 agent/target/
+pkcs11-test/target/
+**/dependency-reduced-pom.xml
 
 # IDE
 .idea/
