@@ -7,7 +7,7 @@ import java.util.Date;
 
 /**
  * Простой файловый логгер агента.
- * Пишет в %APPDATA%\utm-update\logs\agent_YYYYMMDD_HHmmss.log.
+ * Пишет в %APPDATA%/utm-update/logs/agent_YYYYMMDD_HHmmss.log.
  * Без внешних зависимостей — намеренно, чтобы не конфликтовать с UTM.
  */
 public class AgentLogger {

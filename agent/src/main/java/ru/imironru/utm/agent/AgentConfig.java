@@ -7,7 +7,7 @@ package ru.imironru.utm.agent;
 public class AgentConfig {
 
     private String fsrarId = "";
-    private String logDir  = null; // null → %APPDATA%\utm-update\logs
+    private String logDir  = null; // null → %APPDATA%/utm-update/logs
 
     private AgentConfig() {}
 
