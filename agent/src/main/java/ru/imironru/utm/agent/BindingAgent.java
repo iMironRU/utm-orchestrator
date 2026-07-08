@@ -3,6 +3,7 @@ package ru.imironru.utm.agent;
 import net.bytebuddy.agent.builder.AgentBuilder;
 import net.bytebuddy.asm.Advice;
 import net.bytebuddy.matcher.ElementMatchers;
+import net.bytebuddy.utility.JavaModule;
 
 import java.lang.instrument.Instrumentation;
 
