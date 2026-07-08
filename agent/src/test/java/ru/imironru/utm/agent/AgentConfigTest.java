@@ -16,7 +16,7 @@ public class AgentConfigTest {
     public void parsesOnlyFsrarId() {
         AgentConfig cfg = AgentConfig.parse("fsrarId=030000999888");
         assertEquals("030000999888", cfg.getFsrarId());
-        // logDir должен резолвиться в APPDATA\utm-update\logs или user.home
+        // logDir должен резолвиться в APPDATA/utm-update/logs или user.home
         assertTrue(cfg.resolveLogDir().contains("utm-update"));
     }
 
