@@ -1,7 +1,11 @@
 # Maven
 agent/target/
 pkcs11-test/target/
+reader-binder/target/
 **/dependency-reduced-pom.xml
+
+# reader-binder logs
+reader-binder/logs/
 
 # IDE
 .idea/
