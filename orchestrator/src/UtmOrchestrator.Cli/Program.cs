@@ -1,5 +1,6 @@
 using System.Text;
 using UtmOrchestrator.Core.Diagnostics;
+using UtmOrchestrator.Core.Discovery;
 using UtmOrchestrator.Core.Readers;
 using UtmOrchestrator.Core.Services;
 using UtmOrchestrator.Core.Tokens;
@@ -19,10 +20,24 @@ switch (command)
     case "status":
         await ShowStatus();
         break;
+    case "discover":
+        await Discover();
+        break;
     default:
         Console.WriteLine($"Неизвестная команда: {command}");
-        Console.WriteLine("Доступно: scan, readers, status");
+        Console.WriteLine("Доступно: scan, readers, status, discover");
         break;
+}
+
+static async Task Discover()
+{
+    var instances = await UtmDiscovery.DiscoverAsync();
+    Console.WriteLine($"Найдено УТМ (служб Transport*): {instances.Count}");
+    foreach (var i in instances)
+    {
+        Console.WriteLine(
+            $"  {i.ServiceName,-11} порт={i.Port,-5} fsrar={i.ExpectedFsrar ?? "-",-14} serial={i.TokenSerial ?? "-",-10} папка={i.FolderPath}");
+    }
 }
 
 // Стандартная раскладка 2UTM: 8080=Transport(base), 8081=Transport2, ... 8085=Transport6.
