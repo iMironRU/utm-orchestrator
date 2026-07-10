@@ -13,6 +13,7 @@ reader-binder/logs/
 *.user
 orchestrator/**/bin/
 orchestrator/**/obj/
+orchestrator/dist/
 
 # IDE
 .idea/
