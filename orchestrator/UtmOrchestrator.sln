@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UtmOrchestrator.Cli", "src\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UtmOrchestrator.Service", "src\UtmOrchestrator.Service\UtmOrchestrator.Service.csproj", "{39108D30-EF08-4D35-BC7C-0A8642664094}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UtmOrchestrator.Tray", "src\UtmOrchestrator.Tray\UtmOrchestrator.Tray.csproj", "{AB068D7F-A971-4AC6-B8AD-077979EC28D6}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -32,10 +34,15 @@ Global
 		{39108D30-EF08-4D35-BC7C-0A8642664094}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{39108D30-EF08-4D35-BC7C-0A8642664094}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{39108D30-EF08-4D35-BC7C-0A8642664094}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AB068D7F-A971-4AC6-B8AD-077979EC28D6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AB068D7F-A971-4AC6-B8AD-077979EC28D6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AB068D7F-A971-4AC6-B8AD-077979EC28D6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AB068D7F-A971-4AC6-B8AD-077979EC28D6}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{2CE3D7B6-DD9B-4808-B8C1-BA962FDDFE91} = {14615D7B-1320-4E07-BAE9-E35634B1C0AD}
 		{0BF1274C-3BFC-4C73-A5F1-3DB3248B56F3} = {14615D7B-1320-4E07-BAE9-E35634B1C0AD}
 		{39108D30-EF08-4D35-BC7C-0A8642664094} = {14615D7B-1320-4E07-BAE9-E35634B1C0AD}
+		{AB068D7F-A971-4AC6-B8AD-077979EC28D6} = {14615D7B-1320-4E07-BAE9-E35634B1C0AD}
 	EndGlobalSection
 EndGlobal
