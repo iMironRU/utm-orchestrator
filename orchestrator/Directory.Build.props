@@ -6,5 +6,7 @@
     <FileVersion>0.0.0.1</FileVersion>
     <InformationalVersion>0.0.0.1</InformationalVersion>
     <Product>УТМ:Оркестратор</Product>
+    <!-- FileDescription — под этим именем трей виден в «Настройках панели задач». -->
+    <AssemblyTitle>УТМ:Оркестратор</AssemblyTitle>
   </PropertyGroup>
 </Project>
