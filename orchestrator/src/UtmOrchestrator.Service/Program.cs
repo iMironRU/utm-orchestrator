@@ -1,3 +1,4 @@
+using UtmOrchestrator.Core;
 using UtmOrchestrator.Core.Diagnostics;
 using UtmOrchestrator.Core.Discovery;
 using UtmOrchestrator.Core.Health;
@@ -95,9 +96,7 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
 // --- Логи оркестратора (реальные): читаем bringup.log ---
 app.MapGet("/api/logs", (int? limit) =>
 {
-    string path = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "UtmOrchestrator", "bringup.log");
+    string path = AppPaths.BringupLog;
     var lines = new List<object>();
     try
     {
@@ -190,9 +189,7 @@ record RestartRequest(string Service);
 static class ReaderOp
 {
     public static readonly SemaphoreSlim Gate = new(1, 1);
-    private static readonly string LogPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "UtmOrchestrator", "bringup.log");
+    private static readonly string LogPath = UtmOrchestrator.Core.AppPaths.BringupLog;
     public static void FileLog(string m)
     {
         try

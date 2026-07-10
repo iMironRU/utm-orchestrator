@@ -27,9 +27,7 @@ public sealed class BootBringUpWorker : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Безусловная диагностика в файл (виден всегда, в отличие от EventLog).
-        string logPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "UtmOrchestrator", "bringup.log");
+        string logPath = UtmOrchestrator.Core.AppPaths.BringupLog;
         void Log(string m)
         {
             _log.LogInformation("[bringup] {Msg}", m);

@@ -9,9 +9,7 @@ namespace UtmOrchestrator.Core.State;
 /// </summary>
 public sealed class NameStore
 {
-    public static string DefaultPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "UtmOrchestrator", "names.json");
+    public static string DefaultPath => AppPaths.Data("names.json");
 
     private readonly string _path;
     private readonly object _lock = new();

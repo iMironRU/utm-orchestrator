@@ -16,9 +16,7 @@ namespace UtmOrchestrator.Core.State;
 /// </summary>
 public sealed class SerialCache
 {
-    public static string DefaultPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "UtmOrchestrator", "serials.json");
+    public static string DefaultPath => AppPaths.Data("serials.json");
 
     private readonly string _path;
     private readonly object _lock = new();

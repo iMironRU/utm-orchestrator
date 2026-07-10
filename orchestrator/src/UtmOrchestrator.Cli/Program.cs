@@ -1,4 +1,5 @@
 using System.Text;
+using UtmOrchestrator.Core;
 using UtmOrchestrator.Core.Diagnostics;
 using UtmOrchestrator.Core.Discovery;
 using UtmOrchestrator.Core.Readers;
@@ -88,9 +89,7 @@ static void BringUp(string mode)
     if (mode == "introduce" || mode == "introduce-verify" || mode == "introduce-boot")
     {
         bool idry = mode == "introduce-verify";
-        string ilogPath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "UtmOrchestrator", "bringup.log");
+        string ilogPath = AppPaths.BringupLog;
         Directory.CreateDirectory(Path.GetDirectoryName(ilogPath)!);
         void ILog(string m)
         {
@@ -260,9 +259,7 @@ static void ListReaders()
 static void SlotCount()
 {
     string who = $"user={Environment.UserName}, interactive={Environment.UserInteractive}";
-    string outPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "UtmOrchestrator", "slotcount.txt");
+    string outPath = AppPaths.Log("slotcount.txt");
     string line;
     try
     {
@@ -283,9 +280,7 @@ static void SlotCount()
 // чтобы увидеть результат при запуске от SYSTEM (консоль не видна).
 static void PcscTest()
 {
-    string outPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "UtmOrchestrator", "pcsctest.txt");
+    string outPath = AppPaths.Log("pcsctest.txt");
     var sb = new StringBuilder();
     void L(string m) { Console.WriteLine(m); sb.AppendLine($"{DateTime.Now:HH:mm:ss} {m}"); }
 

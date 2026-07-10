@@ -17,9 +17,7 @@ public sealed class PanelSettingsData
 
 public sealed class PanelSettings
 {
-    public static string DefaultPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-        "UtmOrchestrator", "settings.json");
+    public static string DefaultPath => AppPaths.Data("settings.json");
 
     private readonly string _path;
     private readonly object _lock = new();
