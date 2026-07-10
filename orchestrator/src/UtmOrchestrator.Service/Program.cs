@@ -1,6 +1,7 @@
 using UtmOrchestrator.Core.Diagnostics;
 using UtmOrchestrator.Core.Discovery;
 using UtmOrchestrator.Core.Health;
+using UtmOrchestrator.Core.Recovery;
 using UtmOrchestrator.Core.State;
 using UtmOrchestrator.Service;
 
@@ -107,6 +108,55 @@ app.MapPost("/api/tokens/rescan", async (SerialCache serials, OrgInfoCache orgCa
     return Results.Ok(new { ok = true });
 });
 
+// --- Перезапуск одного УТМ через introduce (session-0-safe, без рестарта SCardSvr) ---
+// Запускается в фоне (перезапуск ~50с): фронт увидит результат по опросу /api/status.
+// Все операции с ридерами сериализуем общим замком (одна за раз).
+app.MapPost("/api/utm/restart", (RestartRequest req) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Service))
+        return Results.BadRequest(new { error = "service обязателен" });
+
+    var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var inst = state.Instances.FirstOrDefault(i =>
+        string.Equals(i.ServiceName, req.Service, StringComparison.OrdinalIgnoreCase));
+    if (inst is null) return Results.NotFound(new { error = $"УТМ {req.Service} не найден" });
+    if (string.IsNullOrEmpty(inst.ReaderName))
+        return Results.BadRequest(new { error = "нет ReaderName в конфиге — перезапуск через introduce невозможен" });
+
+    if (!ReaderOp.Gate.Wait(0))
+        return Results.Conflict(new { error = "уже идёт операция с ридерами — попробуйте позже" });
+
+    var target = new BootBringUp.Target(inst.ServiceName, inst.Port, inst.TokenSerial ?? "", inst.ExpectedFsrar, inst.ReaderName);
+    var allReaders = state.Instances.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
+
+    _ = Task.Run(() =>
+    {
+        try { BootBringUp.RestartOne(target, allReaders, ReaderOp.FileLog); }
+        catch (Exception e) { ReaderOp.FileLog($"restart {req.Service}: СБОЙ — {e}"); }
+        finally { ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true, started = req.Service });
+});
+
 app.Run();
 
 record SetNameRequest(string Serial, string? Name);
+record RestartRequest(string Service);
+
+// Сериализация операций с ридерами (перезапуск/подъём) + общий файловый лог.
+static class ReaderOp
+{
+    public static readonly SemaphoreSlim Gate = new(1, 1);
+    private static readonly string LogPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "UtmOrchestrator", "bringup.log");
+    public static void FileLog(string m)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+            File.AppendAllText(LogPath, $"{DateTime.Now:HH:mm:ss} [api] {m}{Environment.NewLine}");
+        }
+        catch { }
+    }
+}

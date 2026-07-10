@@ -199,6 +199,7 @@
       return {
         id: 'live' + i,
         port: inst.port,
+        service: inst.service || '',
         name: inst.title || inst.service || ('УТМ ' + (inst.port || '')),
         customName: inst.name || '',
         org: inst.org || '',
@@ -241,7 +242,7 @@
       ? (u.tokenSerial ? 'Rutoken · ' + u.tokenSerial : 'нет токена')
       : (u.stoppedAt || 'остановлен');
     return {
-      id: u.id, name: u.name, port: u.port,
+      id: u.id, name: u.name, port: u.port, service: u.service || '',
       customName: u.customName || '', org: u.org || '',
       fsrarDisplay: u.fsrar || '—',
       tokenDisplay: u.tokenSerial ? ('Rutoken · ' + u.tokenSerial) : 'нет токена',
@@ -512,7 +513,7 @@
         '</div></div>' +
       callout + metaBlock + progress + exchange +
       '<div style="display:flex;gap:14px;padding-top:8px;border-top:1px solid ' + c.border + ';flex-wrap:wrap;">' +
-        '<a data-action="utmPrimary" data-name="' + esc(u.name) + '" data-label="' + esc(u.primaryLabel) + '" style="font:600 12px system-ui,sans-serif;color:' + c.brand + ';cursor:pointer;">' + esc(u.primaryLabel) + '</a>' +
+        '<a data-action="utmPrimary" data-name="' + esc(u.name) + '" data-service="' + esc(u.service) + '" data-label="' + esc(u.primaryLabel) + '" style="font:600 12px system-ui,sans-serif;color:' + c.brand + ';cursor:pointer;">' + esc(u.primaryLabel) + '</a>' +
         '<a data-action="openLogsFor" data-port="' + esc(u.port) + '" style="font:600 12px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">Логи</a>' +
         '<a data-action="openUtm" data-id="' + esc(u.id) + '" style="font:600 12px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">Подробнее</a>' +
       '</div></div>';
@@ -618,7 +619,7 @@
     var actions = '<div style="display:flex;flex-direction:column;gap:12px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
       '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Действия</div>' +
       '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
-        '<button data-action="utmPrimary" data-name="' + esc(sel.name) + '" data-label="' + esc(sel.primaryLabel) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">' + esc(sel.primaryLabel) + '</button>' +
+        '<button data-action="utmPrimary" data-name="' + esc(sel.name) + '" data-service="' + esc(sel.service) + '" data-label="' + esc(sel.primaryLabel) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">' + esc(sel.primaryLabel) + '</button>' +
         '<button data-action="stopUtm" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Стоп</button>' +
         '<button data-action="openLogsFor" data-port="' + esc(sel.port) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Открыть логи</button>' +
       '</div>' +
@@ -1067,7 +1068,27 @@
     clearOverviewFilter: function () { setState({ overviewFilter: null }); },
     recheckAll: function () { showToast('Проверка запущена…'); pollStatus(); },
     raiseAll: function () { /* TODO: call backend (поднять все УТМ) */ showToast('Поднимаю все УТМ…'); },
-    utmPrimary: function (el) { /* TODO: call backend (перезапуск/запуск/привязка) */ showToast(el.getAttribute('data-label') + ' — ' + el.getAttribute('data-name')); },
+    utmPrimary: function (el) {
+      var label = el.getAttribute('data-label');
+      var service = el.getAttribute('data-service');
+      var name = el.getAttribute('data-name');
+      // «Перезапустить» — реальный вызов службы (introduce, session-0-safe).
+      if (label === 'Перезапустить' && service) {
+        if (!window.confirm('Перезапустить «' + name + '»?\nОбмен с ЕГАИС на ~минуту прервётся.')) return;
+        showToast('Перезапуск «' + name + '»…');
+        fetch('/api/utm/restart', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ service: service }),
+        }).then(function (r) {
+          if (r.status === 409) { showToast('Уже идёт операция с ридерами — подождите'); return; }
+          if (!r.ok) throw new Error();
+          showToast('Перезапуск запущен — статус обновится автоматически');
+        }).catch(function () { showToast('Не удалось запустить перезапуск'); });
+        return;
+      }
+      // Прочие действия (запуск/привязка) — пока заглушка.
+      showToast(label + ' — ' + name);
+    },
 
     /* деталь УТМ */
     stopUtm: function () { /* TODO: call backend (стоп службы) */ showToast('УТМ остановлен'); },
