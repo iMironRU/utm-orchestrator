@@ -44,6 +44,8 @@
     logsFilterPort: '',
     logsFilterLevel: '',
     logsSearch: '',
+    logs: null,                    // реальные логи из /api/logs (null = ещё не грузили)
+    settingsLoaded: false,         // подгружены ли настройки с бэка
     overviewFilter: null,          // null | 'problem'
     rebindOpen: false,
     rebindSelections: {},
@@ -53,7 +55,7 @@
     authed: false,                 // выполнен ли вход в этой сессии
 
     /* --- IP-allowlist (доп. требование продукта) --- */
-    allowedIps: ['192.168.1.50'],
+    allowedIps: [],
 
     /* --- живые данные с /api/status --- */
     liveStatus: null,              // последний успешный ответ API
@@ -361,21 +363,41 @@
     return titles[s] || ['Обзор', ''];
   }
 
+  /* Уведомления из живого статуса: каждый сбойный / требующий внимания УТМ. */
+  function liveNotifications() {
+    var d = state.liveStatus;
+    if (!d || !d.instances) return [];
+    var out = [];
+    d.instances.forEach(function (inst) {
+      var st = mapStatus(inst);
+      if (st === 'error' || st === 'warn') {
+        var name = inst.title || inst.service || ('порт ' + inst.port);
+        out.push({
+          level: st === 'error' ? 'error' : 'warn',
+          text: name + ' (порт ' + inst.port + '): ' + (inst.reason || (st === 'error' ? 'сбой' : 'требует внимания')),
+          time: state.lastCheck,
+        });
+      }
+    });
+    return out;
+  }
+
   function header(c) {
     var t = screenTitles();
-    var badge = state.unreadCount
-      ? '<span style="position:absolute;top:-4px;right:-4px;background:' + c.error + ';color:#fff;font:700 10px system-ui,sans-serif;min-width:16px;height:16px;border-radius:8px;display:flex;align-items:center;justify-content:center;padding:0 3px;">' + state.unreadCount + '</span>'
+    var notifs = liveNotifications();
+    var badge = notifs.length
+      ? '<span style="position:absolute;top:-4px;right:-4px;background:' + c.error + ';color:#fff;font:700 10px system-ui,sans-serif;min-width:16px;height:16px;border-radius:8px;display:flex;align-items:center;justify-content:center;padding:0 3px;">' + notifs.length + '</span>'
       : '';
     var dropdown = '';
     if (state.notifOpen) {
-      var rows = notificationsData.map(function (n) {
+      var rows = notifs.length ? notifs.map(function (n) {
         var dot = ({ error: c.error, warn: c.warn, info: c.textSecondary })[n.level] || c.textTertiary;
         return '<div style="display:flex;gap:9px;padding:11px 14px;border-bottom:1px solid ' + c.border + ';">' +
           '<div style="width:7px;height:7px;border-radius:50%;margin-top:5px;flex-shrink:0;background:' + dot + ';"></div>' +
           '<div><div style="font:12.5px/1.4 system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(n.text) + '</div>' +
           '<div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';margin-top:2px;">' + esc(n.time) + '</div></div></div>';
-      }).join('');
-      dropdown = '<div data-pop="1" style="position:absolute;top:46px;right:0;width:300px;max-width:80vw;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.2);z-index:30;overflow:hidden;">' +
+      }).join('') : '<div style="padding:16px 14px;font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">Всё в порядке — проблем нет.</div>';
+      dropdown = '<div data-pop="1" style="position:absolute;top:46px;right:0;width:320px;max-width:80vw;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.2);z-index:30;overflow:hidden;">' +
         '<div style="padding:12px 14px;border-bottom:1px solid ' + c.border + ';font:700 12.5px system-ui,sans-serif;color:' + c.textPrimary + ';">Уведомления</div>' + rows + '</div>';
     }
     return '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">' +
@@ -700,32 +722,31 @@
     return '<div style="display:flex;flex-direction:column;gap:14px;">' + note + rows + '</div>';
   }
 
-  /* ====================== ЭКРАН: МАСТЕР УСТАНОВКИ ====================== */
+  /* ====================== ЭКРАН: УСТАНОВКА ======================
+     Установка нового УТМ требует прочитать физический токен (PKCS11), а это
+     интерактивная сессия, не служба. Поэтому запускается из приложения в трее.
+     Полноценный веб-мастер появится через связку веб↔трей (см. BACKLOG). */
   function installScreen(c) {
-    var step = state.installStep;
-    var bars = [1, 2, 3, 4, 5].map(function (n) {
-      return '<div style="flex:1;height:6px;border-radius:3px;background:' + (n <= step ? c.brand : c.subtleBg) + ';"></div>';
+    var steps = [
+      'Вставьте новый токен в USB-порт.',
+      'Откройте приложение в трее (значок УТМ:Оркестратор) → «Установить УТМ».',
+      'Мастер прочитает токен (серийник и ФСРАР), даст назначить порт, зарегистрирует службу и привяжет токен.',
+      'Готово — новый УТМ появится здесь, в панели, и начнёт обмен.',
+    ];
+    var list = steps.map(function (s, i) {
+      return '<div style="display:flex;gap:10px;align-items:flex-start;">' +
+        '<div style="width:22px;height:22px;border-radius:50%;background:' + c.brandBg + ';color:' + c.brandText + ';font:700 12px system-ui,sans-serif;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' + (i + 1) + '</div>' +
+        '<div style="font:13px/1.55 system-ui,sans-serif;color:' + c.textPrimary + ';padding-top:1px;">' + esc(s) + '</div></div>';
     }).join('');
-    var progressBar = '<div style="display:flex;gap:6px;">' + bars + '</div>';
 
-    var content = '';
-    if (step === 1) content = installStep1(c);
-    else if (step === 2) content = installStep2(c);
-    else if (step === 3) content = installStep3(c);
-    else if (step === 4) content = installStep4(c);
-    else if (step === 5) content = installStep5(c);
-
-    var prevVis = step === 1 ? 'hidden' : 'visible';
-    var nextDisabled = step === 4 && !state.installDone;
-    var nextOpacity = nextDisabled ? 0.5 : 1;
-    var nextLabel = step === 5 ? 'Готово' : 'Далее';
-
-    var footer = '<div style="display:flex;justify-content:space-between;">' +
-      '<button data-action="wizardPrev" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:9px 18px;border-radius:8px;font:600 13px system-ui,sans-serif;cursor:pointer;visibility:' + prevVis + ';">Назад</button>' +
-      '<button data-action="wizardNext"' + (nextDisabled ? ' disabled' : '') + ' style="opacity:' + nextOpacity + ';background:' + c.brand + ';border:none;color:#fff;padding:9px 18px;border-radius:8px;font:600 13px system-ui,sans-serif;cursor:' + (nextDisabled ? 'default' : 'pointer') + ';">' + nextLabel + '</button>' +
+    return '<div style="display:flex;flex-direction:column;gap:16px;">' +
+      '<div style="display:flex;flex-direction:column;gap:14px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
+        '<div style="font:700 15px system-ui,sans-serif;color:' + c.textPrimary + ';">Установка нового УТМ</div>' +
+        '<div style="font:12.5px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">Добавление УТМ выполняется в приложении в трее — там читается физический токен. Это разовая операция у машины (когда вы подключаете новый токен).</div>' +
+        '<div style="display:flex;flex-direction:column;gap:12px;margin-top:4px;">' + list + '</div>' +
+      '</div>' +
+      '<div style="padding:12px 14px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;font:12px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">Позже установку можно будет запускать прямо отсюда (панель делегирует чтение токена трею).</div>' +
     '</div>';
-
-    return '<div style="display:flex;flex-direction:column;gap:20px;">' + progressBar + content + footer + '</div>';
   }
 
   function installStep1(c) {
@@ -808,39 +829,36 @@
       '<div style="font:600 13.5px system-ui,sans-serif;color:' + c.textPrimary + ';margin-bottom:4px;">Итоговая проверка</div>' + rows + '</div>';
   }
 
-  /* ====================== ЭКРАН: ОБНОВЛЕНИЯ ====================== */
+  /* ====================== ЭКРАН: ОБНОВЛЕНИЯ (реальные версии) ====================== */
   function updatesScreen(c) {
+    var d = state.liveStatus;
+    var orchVer = (d && d.orchestratorVersion) ? d.orchestratorVersion : '—';
     var orchestrator = '<div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 18px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;flex-wrap:wrap;">' +
       '<div><div style="font:700 14px system-ui,sans-serif;color:' + c.textPrimary + ';">Оркестратор</div>' +
-      '<div style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;">Текущая версия 1.4.2 · доступна 1.5.0</div></div>' +
-      '<button data-action="updateOrchestrator" style="background:' + c.brand + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Обновить</button></div>';
+      '<div style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;">Установленная версия ' + esc(orchVer) + '</div></div></div>';
 
-    var rows = utms.map(function (u) {
-      var upToDate = u.status !== 'progress' && (u.id === 'u1' || u.id === 'u2');
-      var isUpdating = u.status === 'progress';
-      var canUpdate = !upToDate && !isUpdating;
-      var versionLine = upToDate ? ('Версия ' + u.version + ' · это последняя версия')
-        : (isUpdating ? ('Обновляется с ' + u.version) : ('Версия ' + u.version + ' · доступна 2.5.14'));
-      var right = upToDate
-        ? '<span style="font:600 12px system-ui,sans-serif;color:' + c.ok + ';">Актуальна</span>'
-        : (isUpdating
-          ? '<span style="font:600 12px system-ui,sans-serif;color:' + c.progress + ';">Обновляется · ' + (u.progress || 0) + '%</span>'
-          : '<button data-action="updateUtm" data-port="' + u.port + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Обновить</button>');
+    var src = utmSource();
+    var rows = src.map(function (u) { return buildUtmView(u, c); }).map(function (v) {
+      var right = v.status === 'ok'
+        ? '<span style="font:600 12px system-ui,sans-serif;color:' + c.ok + ';">' + esc(v.version) + '</span>'
+        : '<span style="font:600 12px system-ui,sans-serif;color:' + c.textTertiary + ';">' + esc(v.version) + '</span>';
       return '<div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:10px;flex-wrap:wrap;">' +
-        '<div><div style="font:700 13.5px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(u.name) + ' <span style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">· порт ' + u.port + '</span></div>' +
-        '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;">' + esc(versionLine) + '</div></div>' + right + '</div>';
+        '<div><div style="font:700 13.5px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(v.name) + ' <span style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">· порт ' + v.port + '</span></div>' +
+        '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;">Версия УТМ</div></div>' + right + '</div>';
     }).join('');
 
+    var note = '<div style="padding:12px 14px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">' +
+      'Показаны установленные версии. Проверка и установка обновлений УТМ — следующий этап (скачивание с fsrar.gov.ru + замена файлов с сохранением базы и перепривязкой).</div>';
+
     return '<div style="display:flex;flex-direction:column;gap:16px;">' + orchestrator +
-      '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">УТМ</div>' + rows + '</div>';
+      '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">УТМ</div>' + rows + note + '</div>';
   }
 
-  /* ====================== ЭКРАН: ЛОГИ ====================== */
+  /* ====================== ЭКРАН: ЛОГИ (реальные, из /api/logs) ====================== */
   function logsFiltered() {
-    return logLines
-      .filter(function (l) { return !state.logsFilterPort || String(l.port) === state.logsFilterPort; })
+    return (state.logs || [])
       .filter(function (l) { return !state.logsFilterLevel || l.level === state.logsFilterLevel; })
-      .filter(function (l) { return !state.logsSearch || l.msg.toLowerCase().indexOf(state.logsSearch.toLowerCase()) !== -1; });
+      .filter(function (l) { return !state.logsSearch || (l.msg || '').toLowerCase().indexOf(state.logsSearch.toLowerCase()) !== -1; });
   }
 
   function logsListHTML(c) {
@@ -849,33 +867,59 @@
       warn: { label: 'ВНИМАНИЕ', color: c.warn, bg: c.warnBg },
       error: { label: 'ОШИБКА', color: c.error, bg: c.errorBg },
     };
+    if (state.logs === null) return '<div style="padding:16px 12px;background:' + c.cardBg + ';font:12.5px system-ui,sans-serif;color:' + c.textTertiary + ';">Загрузка…</div>';
     var rows = logsFiltered().map(function (l) {
-      var m = levelMeta[l.level];
+      var m = levelMeta[l.level] || levelMeta.info;
       return '<div style="display:flex;align-items:baseline;gap:10px;padding:9px 12px;background:' + c.cardBg + ';flex-wrap:wrap;">' +
         '<span style="font:11.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">' + esc(l.t) + '</span>' +
         '<span style="font:10.5px system-ui,sans-serif;font-weight:700;padding:2px 7px;border-radius:5px;background:' + m.bg + ';color:' + m.color + ';">' + m.label + '</span>' +
-        '<span style="font:11.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">:' + l.port + '</span>' +
         '<span style="font:12.5px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(l.msg) + '</span></div>';
     }).join('');
-    return rows || '<div style="padding:16px 12px;background:' + c.cardBg + ';font:12.5px system-ui,sans-serif;color:' + c.textTertiary + ';">Нет записей по выбранным фильтрам</div>';
+    return rows || '<div style="padding:16px 12px;background:' + c.cardBg + ';font:12.5px system-ui,sans-serif;color:' + c.textTertiary + ';">Записей нет.</div>';
+  }
+
+  /* Загрузка реальных логов оркестратора (bringup.log). */
+  function loadLogs() {
+    fetch('/api/logs?limit=400', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { state.logs = d.lines || []; if (state.screen === 'logs') render(); })
+      .catch(function () { state.logs = []; if (state.screen === 'logs') render(); });
+  }
+
+  /* Настройки панели (реальные, /api/settings). */
+  function loadSettings() {
+    fetch('/api/settings', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        state.requireAuth = !!d.requireAuth;
+        state.allowedIps = Array.isArray(d.allowedIps) ? d.allowedIps : [];
+        state.settingsLoaded = true;
+        if (state.screen === 'settings') render();
+      })
+      .catch(function () { state.settingsLoaded = true; });
+  }
+  function saveSettings() {
+    var body = {
+      requireAuth: !!state.requireAuth,
+      allowedIps: (state.allowedIps || []).map(function (s) { return (s || '').trim(); }).filter(Boolean),
+    };
+    return fetch('/api/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
   }
 
   function logsScreen(c) {
-    function portOpt(v, label) {
-      return '<option value="' + v + '"' + (state.logsFilterPort === v ? ' selected' : '') + '>' + label + '</option>';
-    }
     function lvlOpt(v, label) {
       return '<option value="' + v + '"' + (state.logsFilterLevel === v ? ' selected' : '') + '>' + label + '</option>';
     }
-    var portSelect = '<select data-action="onLogsPort" style="background:' + c.cardBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:8px 12px;border-radius:8px;font:12.5px system-ui,sans-serif;">' +
-      portOpt('', 'Все УТМ') + portOpt('8080', '8080') + portOpt('8081', '8081') + portOpt('8082', '8082') + portOpt('8083', '8083') + portOpt('8084', '8084') + portOpt('8085', '8085') + '</select>';
     var lvlSelect = '<select data-action="onLogsLevel" style="background:' + c.cardBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:8px 12px;border-radius:8px;font:12.5px system-ui,sans-serif;">' +
       lvlOpt('', 'Все уровни') + lvlOpt('info', 'Инфо') + lvlOpt('warn', 'Внимание') + lvlOpt('error', 'Ошибка') + '</select>';
 
     return '<div style="display:flex;flex-direction:column;gap:14px;">' +
-      '<div style="display:flex;gap:10px;flex-wrap:wrap;">' + portSelect + lvlSelect +
-        '<input data-input="onLogsSearch" placeholder="Поиск по тексту" value="' + esc(state.logsSearch) + '" style="flex:1;min-width:140px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:8px 12px;border-radius:8px;font:12.5px system-ui,sans-serif;"/>' +
-        '<button data-action="downloadLogs" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Скачать</button>' +
+      '<div style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';">Журнал оркестратора: подъём, перезапуск и лечение УТМ.</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;">' + lvlSelect +
+        '<input data-input="onLogsSearch" placeholder="Поиск (например, порт 8082 или Transport3)" value="' + esc(state.logsSearch) + '" style="flex:1;min-width:160px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:8px 12px;border-radius:8px;font:12.5px system-ui,sans-serif;"/>' +
+        '<button data-action="refreshLogs" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Обновить</button>' +
       '</div>' +
       '<div id="logs-list" style="display:flex;flex-direction:column;gap:1px;background:' + c.border + ';border:1px solid ' + c.border + ';border-radius:10px;overflow:hidden;">' + logsListHTML(c) + '</div>' +
     '</div>';
@@ -1057,15 +1101,16 @@
     goUtm: function () { setScreen('utm'); },
     goTokens: function () { setScreen('tokens'); },
     goUpdates: function () { setScreen('updates'); },
-    goLogs: function () { setScreen('logs'); },
-    goSettings: function () { setScreen('settings'); },
+    goLogs: function () { setScreen('logs'); loadLogs(); },
+    refreshLogs: function () { state.logs = null; render(); loadLogs(); },
+    goSettings: function () { setScreen('settings'); if (!state.settingsLoaded) loadSettings(); },
     goInstall: function () {
       clearInstallTimer();
       setState({ screen: 'install', installStep: 1, installRunning: false, installDone: false, installPct: 0, installLogIndex: 0, mobileNavOpen: false, notifOpen: false });
     },
 
     openUtm: function (el) { setState({ screen: 'utm-detail', selectedUtmId: el.getAttribute('data-id'), mobileNavOpen: false, notifOpen: false }); },
-    openLogsFor: function (el) { clearInstallTimer(); setState({ screen: 'logs', logsFilterPort: String(el.getAttribute('data-port')), mobileNavOpen: false, notifOpen: false }); },
+    openLogsFor: function (el) { clearInstallTimer(); setState({ screen: 'logs', logsSearch: String(el.getAttribute('data-port') || ''), mobileNavOpen: false, notifOpen: false }); loadLogs(); },
     openUtmWeb: function (el) {
       var port = el.getAttribute('data-port');
       if (port) window.open('http://localhost:' + port + '/', '_blank');
@@ -1205,9 +1250,10 @@
     setAuthReqOn: function () {
       // включаем требование входа; не выкидываем пользователя из текущей сессии
       setState({ requireAuth: true, authed: true });
+      saveSettings();
       showToast('Вход в панель будет запрошен при следующем открытии');
     },
-    setAuthReqOff: function () { setState({ requireAuth: false }); showToast('Вход в панель отключён'); },
+    setAuthReqOff: function () { setState({ requireAuth: false }); saveSettings(); showToast('Вход в панель отключён'); },
     addIp: function () { state.allowedIps = state.allowedIps.concat(['']); render(); },
     removeIp: function (el) {
       var idx = parseInt(el.getAttribute('data-idx'), 10);
@@ -1219,11 +1265,11 @@
       state.allowedIps[idx] = el.value; // без ре-рендера — сохраняем фокус
     },
     saveIps: function () {
-      // TODO: call backend (сохранить allowlist, PUT /api/settings/allowed-ips)
       var cleaned = state.allowedIps.map(function (s) { return s.trim(); }).filter(Boolean);
       state.allowedIps = cleaned.length ? cleaned : [''];
       render();
-      showToast('Список IP сохранён');
+      saveSettings().then(function () { showToast('Список IP сохранён'); })
+        .catch(function () { showToast('Не удалось сохранить список'); });
     },
   };
 

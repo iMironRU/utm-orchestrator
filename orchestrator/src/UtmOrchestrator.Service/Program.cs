@@ -14,6 +14,7 @@ builder.Services.AddHostedService<HealthWorker>();
 builder.Services.AddSingleton<NameStore>();
 builder.Services.AddSingleton<SerialCache>();
 builder.Services.AddSingleton<OrgInfoCache>();
+builder.Services.AddSingleton<PanelSettings>();
 
 // Порт панели (по умолчанию 8090, не пересекается с УТМ 8080-8085 и их внутренними).
 string url = builder.Configuration.GetValue("PanelUrl", "http://localhost:8090")!;
@@ -86,8 +87,48 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
         total = health.Count,
         ok,
         faulty = health.Count - ok,
+        orchestratorVersion = UtmOrchestrator.Core.AppInfo.Version,
         instances = list,
     });
+});
+
+// --- Логи оркестратора (реальные): читаем bringup.log ---
+app.MapGet("/api/logs", (int? limit) =>
+{
+    string path = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "UtmOrchestrator", "bringup.log");
+    var lines = new List<object>();
+    try
+    {
+        if (File.Exists(path))
+        {
+            var all = File.ReadLines(path).ToList();
+            int take = Math.Clamp(limit ?? 300, 10, 2000);
+            foreach (var raw in all.Skip(Math.Max(0, all.Count - take)))
+            {
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+                // формат: "HH:mm:ss [src] сообщение"
+                string time = raw.Length >= 8 && raw[2] == ':' ? raw.Substring(0, 8) : "";
+                string msg = time.Length > 0 ? raw.Substring(8).TrimStart() : raw;
+                string level =
+                    msg.Contains('✗') || msg.Contains("СБОЙ") || msg.Contains("ОШИБКА") || msg.Contains("не поднялся") ? "error" :
+                    msg.Contains("ВНИМАНИЕ") || msg.Contains("не тот") ? "warn" : "info";
+                lines.Add(new { t = time, level, msg });
+            }
+        }
+    }
+    catch { /* лог недоступен — вернём пусто */ }
+    lines.Reverse(); // новые сверху
+    return Results.Json(new { lines });
+});
+
+// --- Настройки панели (реальные, persist) ---
+app.MapGet("/api/settings", (PanelSettings settings) => Results.Json(settings.Load()));
+app.MapPost("/api/settings", (PanelSettingsData data, PanelSettings settings) =>
+{
+    settings.Save(data);
+    return Results.Ok(new { ok = true });
 });
 
 // --- Задать/сбросить кастомное краткое имя УТМ (по серийнику) ---
