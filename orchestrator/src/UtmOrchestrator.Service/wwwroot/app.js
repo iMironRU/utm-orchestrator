@@ -654,28 +654,49 @@
       '<span style="font:600 12px system-ui,sans-serif;color:' + v.statusColor + ';">' + esc(v.statusLabel) + '</span></div>';
   }
 
-  /* ====================== ЭКРАН: ТОКЕНЫ ====================== */
+  /* ====================== ЭКРАН: ТОКЕНЫ ======================
+     Реальные данные из статуса: один токен = привязанный УТМ. Без PKCS11-скана
+     (он опасен на занятых токенах) — состояние токена берём из здоровья УТМ. */
   function tokensScreen(c) {
-    var rows = tokens.map(function (t) {
-      var unbound = t.present && !t.bound;
-      var missing = !t.present;
-      var presenceLabel = missing ? 'Отсутствует' : (unbound ? 'Не привязан' : 'Подключён');
-      var presenceColor = missing ? c.error : (unbound ? c.warn : c.ok);
-      var borderColor = (missing || unbound) ? presenceColor : c.border;
-      var fsrarDisplay = t.fsrar || 'нет ФСРАР';
-      var boundDisplay = t.bound ? ('порт ' + t.bound) : 'не привязан';
+    var src = utmSource();
+    var views = src.map(function (u) { return buildUtmView(u, c); });
+
+    var rows = views.map(function (v) {
+      var hasToken = !!v.tokenSerial;
+      var st = v.status; // ok | warn | error | stopped | progress
+      var label, color;
+      if (!hasToken) { label = 'Токен не сопоставлен'; color = c.warn; }
+      else if (st === 'ok') { label = 'Работает'; color = c.ok; }
+      else if (st === 'error') { label = 'Сбой ключа/токена'; color = c.error; }
+      else if (st === 'stopped') { label = 'УТМ остановлен'; color = c.stopped; }
+      else if (st === 'progress') { label = 'Идёт операция'; color = c.progress; }
+      else { label = 'Требует внимания'; color = c.warn; }
+
+      var borderColor = (st === 'error' || (!hasToken)) ? color : c.border;
+      var serialDisp = hasToken ? 'Rutoken · ' + v.tokenSerial : 'серийник неизвестен';
+      var sub = (v.fsrarDisplay && v.fsrarDisplay !== '—' ? 'ФСРАР ' + v.fsrarDisplay : 'ФСРАР —') +
+                ' · ' + (v.service ? v.service + ' :' + v.port : 'порт ' + v.port);
+
+      // Для сбойного токена — точечный перезапуск УТМ (introduce, служба session 0).
+      var action = (st === 'error' && v.service)
+        ? '<button data-action="utmPrimary" data-name="' + esc(v.name) + '" data-service="' + esc(v.service) + '" data-label="Перезапустить" ' +
+          'style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:6px 12px;border-radius:7px;font:600 12px system-ui,sans-serif;cursor:pointer;">Перезапустить УТМ</button>'
+        : '<div style="font:600 12px system-ui,sans-serif;color:' + color + ';">' + esc(label) + '</div>';
+
       return '<div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;background:' + c.cardBg + ';border:1px solid ' + borderColor + ';border-radius:10px;flex-wrap:wrap;">' +
-        '<div style="display:flex;align-items:center;gap:14px;">' +
-          '<div style="width:9px;height:9px;border-radius:50%;background:' + presenceColor + ';flex-shrink:0;"></div>' +
-          '<div><div style="font:13.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textPrimary + ';">' + esc(t.serial) + '</div>' +
-          '<div style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';margin-top:2px;">' + esc(fsrarDisplay) + ' · ' + esc(boundDisplay) + '</div></div>' +
-        '</div>' +
-        '<div style="font:600 12px system-ui,sans-serif;color:' + presenceColor + ';">' + esc(presenceLabel) + '</div>' +
+        '<div style="display:flex;align-items:center;gap:14px;min-width:0;">' +
+          '<div style="width:9px;height:9px;border-radius:50%;background:' + color + ';flex-shrink:0;"></div>' +
+          '<div style="min-width:0;"><div style="font:13.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textPrimary + ';">' + esc(serialDisp) + '</div>' +
+          '<div style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';margin-top:2px;">' + esc(sub) + '</div></div>' +
+        '</div>' + action +
       '</div>';
     }).join('');
-    return '<div style="display:flex;flex-direction:column;gap:14px;">' +
-      '<div style="display:flex;justify-content:flex-end;"><button data-action="resetReaders" style="background:' + c.brand + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 13px system-ui,sans-serif;cursor:pointer;">Сбросить ридеры</button></div>' +
-      rows + '</div>';
+
+    var note = '<div style="display:flex;align-items:flex-start;gap:8px;padding:12px 14px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;">' +
+      '<div style="font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Если токен «завис» (система его не видит) — «Полечить токены» в приложении в трее ' +
+      '(значок УТМ:Оркестратор → «Полечить токены»): оно перезапускает службу смарт-карт. Из веб-панели это сделать нельзя.</div></div>';
+
+    return '<div style="display:flex;flex-direction:column;gap:14px;">' + note + rows + '</div>';
   }
 
   /* ====================== ЭКРАН: МАСТЕР УСТАНОВКИ ====================== */
