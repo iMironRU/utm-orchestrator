@@ -26,6 +26,18 @@ public sealed class TokenScanner
 
     public TokenScanner(string? libPath = null) => _libPath = libPath ?? DefaultLibPath;
 
+    /// <summary>
+    /// Лёгкая проверка: сколько слотов с присутствующим токеном видит PKCS11.
+    /// Только GetSlotList — БЕЗ C_GetTokenInfo/сессий, поэтому безопасно даже на
+    /// токенах, занятых живыми УТМ. Для диагностики доступа к PKCS11 из session 0.
+    /// </summary>
+    public int CountTokens()
+    {
+        using var pkcs11 = _factories.Pkcs11LibraryFactory.LoadPkcs11Library(
+            _factories, _libPath, AppType.SingleThreaded);
+        return pkcs11.GetSlotList(SlotsType.WithTokenPresent).Count;
+    }
+
     public IReadOnlyList<TokenInfo> Scan()
     {
         var result = new List<TokenInfo>();

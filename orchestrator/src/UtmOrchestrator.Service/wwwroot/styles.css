@@ -1,0 +1,25 @@
+/* UTM Orchestrator — минимальный сброс + анимации.
+   Вся тематизация (цвета/отступы/радиусы) задаётся инлайн из app.js
+   по токенам дизайна, чтобы точно повторить хэндофф. */
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; min-height: 100%; }
+body {
+  font-family: system-ui, -apple-system, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+#app { min-height: 100vh; }
+a { color: inherit; text-decoration: none; }
+input, button, select, textarea { font-family: inherit; }
+button { -webkit-appearance: none; }
+
+/* видимый фокус для доступности, не ломает дизайн */
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+  outline: 2px solid #8b7cf6;
+  outline-offset: 1px;
+}
+
+@keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+::selection { background: rgba(139, 124, 246, .3); }

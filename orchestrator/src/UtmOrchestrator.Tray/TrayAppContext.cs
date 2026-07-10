@@ -1,4 +1,5 @@
 using System.Drawing;
+using UtmOrchestrator.Core;
 using UtmOrchestrator.Core.Services;
 
 namespace UtmOrchestrator.Tray;
@@ -31,7 +32,7 @@ public sealed class TrayAppContext : ApplicationContext
         _notify = new NotifyIcon
         {
             Icon = _disconnected,
-            Text = "UTM Orchestrator — загрузка…",
+            Text = Truncate($"{AppInfo.Title} — загрузка…", 63),
             Visible = true,
             ContextMenuStrip = menu,
         };
@@ -62,10 +63,8 @@ public sealed class TrayAppContext : ApplicationContext
                 _ => _disconnected,
             };
 
-            string svc = snap.OrchestratorService == ServiceState.NotInstalled
-                ? "служба не уст."
-                : $"служба: {snap.OrchestratorService}";
-            _notify.Text = Truncate($"UTM Orchestrator — {snap.Summary} ({svc})", 63);
+            // Tooltip: имя продукта с версией + краткая сводка по УТМ.
+            _notify.Text = Truncate($"{AppInfo.Title} — {snap.Summary}", 63);
 
             _form?.UpdateSnapshot(snap);
         }

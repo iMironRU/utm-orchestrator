@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "panel",
+      "runtimeExecutable": "C:\\dev-tools\\dotnet\\dotnet.exe",
+      "runtimeArgs": ["run", "--project", "src/UtmOrchestrator.Service", "--HealthCheckIntervalSeconds", "3600"],
+      "port": 8090
+    }
+  ]
+}

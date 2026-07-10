@@ -22,4 +22,12 @@ public sealed class UtmInstance
 
     /// <summary>Ожидаемый ФСРАР-ИД (вторичный сигнал/верификация).</summary>
     public string? ExpectedFsrar { get; set; }
+
+    /// <summary>
+    /// Нативное имя PC/SC-ридера/устройства этого токена («Aktiv Rutoken ECP N») —
+    /// аналог attrReader в config.ini 2UTM. По нему служба делает SCardIntroduceReader
+    /// при позиционировании (write-путь без рестарта SCardSvr). Захватывается при
+    /// подъёме/установке (когда токены сканируются) и хранится.
+    /// </summary>
+    public string? ReaderName { get; set; }
 }

@@ -19,18 +19,30 @@ public static class UtmDiscovery
 {
     private static readonly Regex ServicePattern = new(@"^Transport\d*$", RegexOptions.Compiled);
 
-    public static async Task<List<UtmInstance>> DiscoverAsync(CancellationToken ct = default)
+    /// <param name="scanTokens">
+    /// Если true — выполняет PKCS11-скан токенов и обновляет кэш серийников. ОПАСНО
+    /// на рабочей машине: драйвер может уронить процесс при обращении к занятому
+    /// живым УТМ токену (см. <see cref="SerialCache"/>). По умолчанию false —
+    /// серийники берутся из кэша, токены не трогаем. Скан — только в окне
+    /// обслуживания по явной команде.
+    /// </param>
+    public static async Task<List<UtmInstance>> DiscoverAsync(
+        CancellationToken ct = default, bool scanTokens = false, SerialCache? serials = null)
     {
         var result = new List<UtmInstance>();
+        serials ??= new SerialCache();
 
-        // ФСРАР -> серийник по реально подключённым токенам
-        var fsrarToSerial = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        try
+        // Опционально: разово выучить ФСРАР -> серийник по реально подключённым
+        // токенам и положить в кэш. В горячем пути (опрос статуса) НЕ вызывается.
+        if (scanTokens)
         {
-            foreach (var t in new TokenScanner().Scan())
-                if (t.HasFsrar) fsrarToSerial[t.FsrarId!] = t.Serial;
+            try
+            {
+                foreach (var t in new TokenScanner().Scan())
+                    if (t.HasFsrar) serials.Learn(t.FsrarId!, t.Serial);
+            }
+            catch { /* токены недоступны — не критично для обнаружения служб */ }
         }
-        catch { /* токены недоступны — не критично для обнаружения служб */ }
 
         using var http = new UtmHttpClient();
 
@@ -56,8 +68,8 @@ public static class UtmDiscovery
                 {
                     var info = await http.GetInfoAsync(port, ct).ConfigureAwait(false);
                     inst.ExpectedFsrar = info?.OwnerId;
-                    if (inst.ExpectedFsrar != null && fsrarToSerial.TryGetValue(inst.ExpectedFsrar, out var serial))
-                        inst.TokenSerial = serial;
+                    if (inst.ExpectedFsrar != null)
+                        inst.TokenSerial = serials.GetSerial(inst.ExpectedFsrar);
                 }
 
                 result.Add(inst);

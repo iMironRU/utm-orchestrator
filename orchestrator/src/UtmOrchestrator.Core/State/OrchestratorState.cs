@@ -14,6 +14,11 @@ public sealed class OrchestratorState
     /// </summary>
     public string? PinRef { get; set; }
 
+    /// <summary>%ProgramData%\UtmOrchestrator\state.json — привязки служба↔порт↔токен.</summary>
+    public static string DefaultPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "UtmOrchestrator", "state.json");
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         WriteIndented = true,

@@ -1,4 +1,5 @@
 using System.Drawing;
+using UtmOrchestrator.Core;
 using UtmOrchestrator.Core.Health;
 using UtmOrchestrator.Core.Services;
 
@@ -19,7 +20,7 @@ public sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "UTM Orchestrator";
+        Text = AppInfo.Title;
         Width = 760;
         Height = 500;
         StartPosition = FormStartPosition.CenterScreen;
