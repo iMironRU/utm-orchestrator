@@ -13,4 +13,12 @@
     <ProjectReference Include="..\UtmOrchestrator.Core\UtmOrchestrator.Core.csproj" />
   </ItemGroup>
 
+  <!-- Дизайнерские иконки трея встроены как ресурсы (self-contained exe). -->
+  <ItemGroup>
+    <EmbeddedResource Include="assets\tray\tray-ok-32.png"><LogicalName>tray-ok.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="assets\tray\tray-error-32.png"><LogicalName>tray-error.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="assets\tray\tray-busy-32.png"><LogicalName>tray-busy.png</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="assets\tray\tray-disconnected-32.png"><LogicalName>tray-disconnected.png</LogicalName></EmbeddedResource>
+  </ItemGroup>
+
 </Project>

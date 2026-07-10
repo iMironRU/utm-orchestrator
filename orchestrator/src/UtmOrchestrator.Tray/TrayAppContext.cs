@@ -11,16 +11,16 @@ public sealed class TrayAppContext : ApplicationContext
 {
     private readonly NotifyIcon _notify;
     private readonly System.Windows.Forms.Timer _timer;
-    private readonly Icon _green, _amber, _red, _gray;
+    private readonly Icon _ok, _error, _busyIcon, _disconnected;
     private MainForm? _form;
     private bool _busy;
 
     public TrayAppContext()
     {
-        _green = TrayIcons.Make(Color.FromArgb(46, 125, 50));
-        _amber = TrayIcons.Make(Color.FromArgb(249, 168, 37));
-        _red = TrayIcons.Make(Color.FromArgb(198, 40, 40));
-        _gray = TrayIcons.Make(Color.FromArgb(140, 140, 140));
+        _ok = TrayIcons.Load("tray-ok");
+        _error = TrayIcons.Load("tray-error");
+        _busyIcon = TrayIcons.Load("tray-busy");
+        _disconnected = TrayIcons.Load("tray-disconnected");
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("Открыть", null, (_, _) => ShowWindow());
@@ -30,7 +30,7 @@ public sealed class TrayAppContext : ApplicationContext
 
         _notify = new NotifyIcon
         {
-            Icon = _gray,
+            Icon = _disconnected,
             Text = "UTM Orchestrator — загрузка…",
             Visible = true,
             ContextMenuStrip = menu,
@@ -52,12 +52,14 @@ public sealed class TrayAppContext : ApplicationContext
         {
             var snap = await StatusProvider.GetAsync();
 
+            // 4 дизайнерских состояния иконки: ok / error / busy / disconnected.
+            // Ok → ok; Warn и Fault → error (нужно внимание); нет данных → disconnected.
             _notify.Icon = snap.Overall switch
             {
-                OverallStatus.Ok => _green,
-                OverallStatus.Warn => _amber,
-                OverallStatus.Fault => _red,
-                _ => _gray,
+                OverallStatus.Ok => _ok,
+                OverallStatus.Warn => _error,
+                OverallStatus.Fault => _error,
+                _ => _disconnected,
             };
 
             string svc = snap.OrchestratorService == ServiceState.NotInstalled
