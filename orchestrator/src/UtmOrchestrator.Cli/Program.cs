@@ -34,6 +34,9 @@ switch (command)
     case "restart":
         RestartUtm(args.Length > 1 ? args[1] : "");
         break;
+    case "heal":
+        Heal();
+        break;
     case "slotcount":
         SlotCount();
         break;
@@ -313,6 +316,47 @@ static void PcscTest()
         L($"ОШИБКА: {e.GetType().Name}: {e.Message}");
     }
     try { Directory.CreateDirectory(Path.GetDirectoryName(outPath)!); File.AppendAllText(outPath, sb.ToString()); } catch { }
+}
+
+// «Полечить токены»: сброс SCardSvr (будит замёрзшие/уснувшие токены) + introduce-
+// подъём всех УТМ. Для аварийного случая «токен завис». Запускается из трея с UAC —
+// держим консоль открытой до Enter, чтобы оператор увидел результат.
+static void Heal()
+{
+    var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var targets = state.Instances
+        .Where(i => !string.IsNullOrEmpty(i.TokenSerial))
+        .Select(i => new BootBringUp.Target(i.ServiceName, i.Port, i.TokenSerial!, i.ExpectedFsrar, i.ReaderName))
+        .ToList();
+    string logPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+        "UtmOrchestrator", "bringup.log");
+    Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+    void Log(string m)
+    {
+        string line = $"{DateTime.Now:HH:mm:ss} {m}";
+        Console.WriteLine(line);
+        try { File.AppendAllText(logPath, line + Environment.NewLine); } catch { }
+    }
+
+    Log("=== heal (лечение токенов) запущен ===");
+    if (targets.Count == 0) { Log("Нет привязок в state.json — нечего лечить."); }
+    else
+    {
+        try
+        {
+            // 1) Сброс к нативному (рестарт SCardSvr будит замёрзшие токены).
+            ReaderReset.ResetToNative(targets.Select(t => t.Service), Log);
+            // 2) Подъём всех УТМ через introduce (оставит ридеры введёнными).
+            var r = BootBringUp.ApplyIntroduce(targets, Log);
+            PersistReaders(state, r.ReaderBySerial, Log);
+            Log($"heal: поднято {r.Started.Count}, ошибок {r.Failed.Count}, успех={r.Success}");
+        }
+        catch (Exception e) { Log($"heal: СБОЙ — {e}"); }
+    }
+    Console.WriteLine();
+    Console.WriteLine("Готово. Нажмите Enter, чтобы закрыть окно.");
+    try { Console.ReadLine(); } catch { }
 }
 
 // Перезапуск одного УТМ через introduce (не трогая остальные). Пишет в bringup.log.
