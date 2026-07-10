@@ -1,0 +1,34 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{14615D7B-1320-4E07-BAE9-E35634B1C0AD}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UtmOrchestrator.Core", "src\UtmOrchestrator.Core\UtmOrchestrator.Core.csproj", "{2CE3D7B6-DD9B-4808-B8C1-BA962FDDFE91}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "UtmOrchestrator.Cli", "src\UtmOrchestrator.Cli\UtmOrchestrator.Cli.csproj", "{0BF1274C-3BFC-4C73-A5F1-3DB3248B56F3}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{2CE3D7B6-DD9B-4808-B8C1-BA962FDDFE91}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{2CE3D7B6-DD9B-4808-B8C1-BA962FDDFE91}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{2CE3D7B6-DD9B-4808-B8C1-BA962FDDFE91}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{2CE3D7B6-DD9B-4808-B8C1-BA962FDDFE91}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0BF1274C-3BFC-4C73-A5F1-3DB3248B56F3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0BF1274C-3BFC-4C73-A5F1-3DB3248B56F3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0BF1274C-3BFC-4C73-A5F1-3DB3248B56F3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0BF1274C-3BFC-4C73-A5F1-3DB3248B56F3}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{2CE3D7B6-DD9B-4808-B8C1-BA962FDDFE91} = {14615D7B-1320-4E07-BAE9-E35634B1C0AD}
+		{0BF1274C-3BFC-4C73-A5F1-3DB3248B56F3} = {14615D7B-1320-4E07-BAE9-E35634B1C0AD}
+	EndGlobalSection
+EndGlobal

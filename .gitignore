@@ -7,6 +7,13 @@ reader-binder/target/
 # reader-binder logs
 reader-binder/logs/
 
+# .NET
+[Bb]in/
+[Oo]bj/
+*.user
+orchestrator/**/bin/
+orchestrator/**/obj/
+
 # IDE
 .idea/
 *.iml
