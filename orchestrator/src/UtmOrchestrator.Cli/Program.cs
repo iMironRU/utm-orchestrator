@@ -1,5 +1,7 @@
 using System.Text;
+using UtmOrchestrator.Core.Diagnostics;
 using UtmOrchestrator.Core.Readers;
+using UtmOrchestrator.Core.Services;
 using UtmOrchestrator.Core.Tokens;
 
 Console.OutputEncoding = Encoding.UTF8;
@@ -14,10 +16,39 @@ switch (command)
     case "readers":
         ListReaders();
         break;
+    case "status":
+        await ShowStatus();
+        break;
     default:
         Console.WriteLine($"Неизвестная команда: {command}");
-        Console.WriteLine("Доступно: scan, readers");
+        Console.WriteLine("Доступно: scan, readers, status");
         break;
+}
+
+// Стандартная раскладка 2UTM: 8080=Transport(base), 8081=Transport2, ... 8085=Transport6.
+static (int Port, string Service)[] StandardLayout() => new[]
+{
+    (8080, "Transport"),
+    (8081, "Transport2"),
+    (8082, "Transport3"),
+    (8083, "Transport4"),
+    (8084, "Transport5"),
+    (8085, "Transport6"),
+};
+
+static async Task ShowStatus()
+{
+    using var http = new UtmHttpClient();
+    Console.WriteLine("порт  служба       состояние    ownerId         rsa      gost");
+    foreach (var (port, service) in StandardLayout())
+    {
+        var state = ServiceControl.GetState(service);
+        var info = await http.GetInfoAsync(port);
+        string own = info?.OwnerId ?? "-";
+        string rsa = info == null ? "нет ответа" : (info.RsaOk ? "ok" : "ОШИБКА");
+        string gost = info?.GostValid == true ? "ok" : "-";
+        Console.WriteLine($"{port}  {service,-11}  {state,-11}  {own,-14}  {rsa,-8}  {gost}");
+    }
 }
 
 static void ListReaders()
