@@ -76,6 +76,8 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
             name = customName,       // кастомное краткое имя (или null)
             org = orgDisplay,        // адрес/организация из сертификата (или null)
             inn = org?.Inn,
+            folder = h.Instance.FolderPath,   // папка УТМ
+            version = h.Info?.Version,        // версия УТМ (из /api/info/list)
         });
     }
 

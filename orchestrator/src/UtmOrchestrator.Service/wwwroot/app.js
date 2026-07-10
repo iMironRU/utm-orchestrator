@@ -207,7 +207,8 @@
         tokenSerial: inst.serial || null,
         status: st,
         reason: inst.reason || (st === 'warn' ? 'Требуется внимание' : ''),
-        version: '—',
+        version: inst.version || '—',
+        folder: inst.folder || '',
         lastSync: 'только что',
         stoppedAt: 'остановлен',
         progressLabel: inst.reason || 'Идёт операция',
@@ -514,7 +515,7 @@
       callout + metaBlock + progress + exchange +
       '<div style="display:flex;gap:14px;padding-top:8px;border-top:1px solid ' + c.border + ';flex-wrap:wrap;">' +
         '<a data-action="utmPrimary" data-name="' + esc(u.name) + '" data-service="' + esc(u.service) + '" data-label="' + esc(u.primaryLabel) + '" style="font:600 12px system-ui,sans-serif;color:' + c.brand + ';cursor:pointer;">' + esc(u.primaryLabel) + '</a>' +
-        '<a data-action="openLogsFor" data-port="' + esc(u.port) + '" style="font:600 12px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">Логи</a>' +
+        '<a data-action="openUtmWeb" data-port="' + esc(u.port) + '" style="font:600 12px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">Открыть УТМ ↗</a>' +
         '<a data-action="openUtm" data-id="' + esc(u.id) + '" style="font:600 12px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">Подробнее</a>' +
       '</div></div>';
   }
@@ -616,13 +617,8 @@
         '</div>'
       : '';
 
-    var actions = '<div style="display:flex;flex-direction:column;gap:12px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
-      '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Действия</div>' +
-      '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
-        '<button data-action="utmPrimary" data-name="' + esc(sel.name) + '" data-service="' + esc(sel.service) + '" data-label="' + esc(sel.primaryLabel) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">' + esc(sel.primaryLabel) + '</button>' +
-        '<button data-action="stopUtm" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Стоп</button>' +
-        '<button data-action="openLogsFor" data-port="' + esc(sel.port) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Открыть логи</button>' +
-      '</div>' +
+    // Перепривязку токена показываем ТОЛЬКО для неработающего УТМ — у живого её делать нельзя.
+    var rebindBlock = (sel.status === 'ok') ? '' :
       '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:6px;border-top:1px solid ' + c.border + ';">' +
         '<span style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">Перепривязать токен:</span>' +
         '<div data-pop="1" style="position:relative;">' +
@@ -630,12 +626,17 @@
             '<span>' + esc(rebindLabel) + '</span><span style="color:' + c.textTertiary + ';font-family:system-ui,sans-serif;">▾</span></button>' +
           rebindList +
         '</div>' +
+      '</div>';
+
+    var actions = '<div style="display:flex;flex-direction:column;gap:12px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
+      '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Действия</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
+        '<button data-action="utmPrimary" data-name="' + esc(sel.name) + '" data-service="' + esc(sel.service) + '" data-label="' + esc(sel.primaryLabel) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">' + esc(sel.primaryLabel) + '</button>' +
+        '<button data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Открыть УТМ ↗</button>' +
+        '<button data-action="openLogsFor" data-port="' + esc(sel.port) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Логи</button>' +
       '</div>' +
-      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
-        '<span style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">Порт:</span>' +
-        '<input type="number" value="' + esc(sel.port) + '" style="width:90px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:7px 10px;border-radius:7px;font:12.5px ui-monospace,Menlo,Consolas,monospace;"/>' +
-        '<button data-action="savePort" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:7px 12px;border-radius:7px;font:600 12px system-ui,sans-serif;cursor:pointer;">Сохранить</button>' +
-      '</div></div>';
+      rebindBlock +
+    '</div>';
 
     var danger = '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:' + c.errorSoftBg + ';border:1px solid ' + c.error + ';border-radius:12px;flex-wrap:wrap;gap:10px;">' +
       '<div><div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Удалить УТМ</div>' +
@@ -1065,6 +1066,10 @@
 
     openUtm: function (el) { setState({ screen: 'utm-detail', selectedUtmId: el.getAttribute('data-id'), mobileNavOpen: false, notifOpen: false }); },
     openLogsFor: function (el) { clearInstallTimer(); setState({ screen: 'logs', logsFilterPort: String(el.getAttribute('data-port')), mobileNavOpen: false, notifOpen: false }); },
+    openUtmWeb: function (el) {
+      var port = el.getAttribute('data-port');
+      if (port) window.open('http://localhost:' + port + '/', '_blank');
+    },
 
     /* тема / оболочка */
     toggleTheme: function () {
