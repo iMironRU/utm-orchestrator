@@ -462,10 +462,14 @@ app.MapPost("/api/2utm/adopt", async (SerialCache serials, CancellationToken ct)
         new OrchestratorState { Instances = instances }.Save(OrchestratorState.DefaultPath);
         ReaderOp.FileLog($"2UTM adopt: подхвачено {matched} из {cfg.Utms.Count}");
 
-        // заглушить 2UTM (обратимо) — чтобы на загрузке не дрался с нами за ридеры
+        // заглушить 2UTM (обратимо) — чтобы на загрузке не дрался с нами за ридеры.
+        // Если служба есть — стоп + Disabled + autostart off; если службы нет (только
+        // папка) — хотя бы autostart off, чтобы отразить «перенято».
         var svc = UtmOrchestrator.Core.Migration.TwoUtmConfig.FindService();
         if (svc is not null)
             UtmOrchestrator.Core.Migration.TwoUtmControl.Disable(svc.Value.Name, cfgPath, ReaderOp.FileLog);
+        else if (cfgPath is not null)
+            UtmOrchestrator.Core.Migration.TwoUtmConfig.SetAutostart(cfgPath, false, ReaderOp.FileLog);
 
         return Results.Ok(new { ok = true, matched, total = cfg.Utms.Count, disabled = svc?.Name });
     }
@@ -476,11 +480,15 @@ app.MapPost("/api/2utm/adopt", async (SerialCache serials, CancellationToken ct)
 app.MapPost("/api/2utm/restore", () =>
 {
     if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
-    var svc = UtmOrchestrator.Core.Migration.TwoUtmConfig.FindService();
-    if (svc is null) return Results.NotFound(new { error = "служба 2UTM не найдена" });
     string? cfgPath = UtmOrchestrator.Core.Migration.TwoUtmConfig.FindConfigPath();
-    UtmOrchestrator.Core.Migration.TwoUtmControl.Restore(svc.Value.Name, cfgPath, ReaderOp.FileLog);
-    return Results.Ok(new { ok = true, restored = svc.Value.Name });
+    if (cfgPath is null && UtmOrchestrator.Core.Migration.TwoUtmConfig.FindFolder() is null)
+        return Results.NotFound(new { error = "2UTM не найден" });
+    var svc = UtmOrchestrator.Core.Migration.TwoUtmConfig.FindService();
+    if (svc is not null)
+        UtmOrchestrator.Core.Migration.TwoUtmControl.Restore(svc.Value.Name, cfgPath, ReaderOp.FileLog);
+    else if (cfgPath is not null)
+        UtmOrchestrator.Core.Migration.TwoUtmConfig.SetAutostart(cfgPath, true, ReaderOp.FileLog);
+    return Results.Ok(new { ok = true, restored = svc?.Name });
 });
 
 app.Run();

@@ -769,32 +769,44 @@
     '</div>';
   }
 
-  // Блок «Обнаружен 2UTM» (предшественник) — показываем, только если найден.
+  // Блок 2UTM (предшественник) — показываем, только если найдена его папка.
+  // Два состояния: (1) 2UTM активен → «Перенять»; (2) перенято/заглушён → «Вернуть».
   function twoUtmCard(c) {
     var t = state.twoUtm;
     if (!t || !t.present) return '';
     var svc = t.service || {};
     var running = svc.state === 'Running';
+    var active = t.autostart || running;              // 2UTM ещё рулит на загрузке
+    var count = t.count || (t.utms || []).length;
+
     var rows = (t.utms || []).map(function (u) {
       var ok = !!u.matchedService;
       return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 12px;background:' + c.subtleBg + ';border-radius:8px;flex-wrap:wrap;">' +
         '<span style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textSecondary + ';">порт ' + esc(u.port) + ' · ' + esc(u.serial) + ' · ' + esc(u.reader) + '</span>' +
         '<span style="font:600 12px system-ui,sans-serif;color:' + (ok ? c.ok : c.warn) + ';">' + (ok ? esc(u.matchedService) + ' ✓' : 'служба не найдена') + '</span></div>';
     }).join('');
-    var statusLine = running
-      ? '<b style="color:' + c.warn + ';">служба запущена (' + esc(svc.name || '') + ')</b> — на загрузке она дерётся с нами за ридеры, поэтому её нужно заглушить'
-      : (svc.name ? '<b>служба ' + esc(svc.name) + '</b> · ' + esc(svc.state) : 'служба не зарегистрирована');
-    var actions = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:2px;">' +
-      '<button data-action="adopt2Utm" style="background:' + c.ok + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Перенять управление у 2UTM</button>' +
-      (running || (svc.startMode && svc.startMode !== '-')
-        ? '<button data-action="restore2Utm" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textSecondary + ';padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Вернуть 2UTM</button>'
-        : '') +
-    '</div>';
-    return '<div style="display:flex;flex-direction:column;gap:12px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.warn + ';border-radius:12px;">' +
-      '<div style="font:700 15px system-ui,sans-serif;color:' + c.textPrimary + ';">Обнаружен 2UTM (' + (t.count || (t.utms || []).length) + ' УТМ)</div>' +
-      '<div style="font:12.5px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">Предыдущий менеджер УТМ. ' + statusLine + '. «Перенять управление» подхватит его УТМ под оркестратор и <b>обратимо</b> заглушит 2UTM (стоп + автозапуск off; файлы не трогаем). Токены и сами УТМ не меняются.</div>' +
+
+    if (active) {
+      // --- Состояние 1: 2UTM активен, предлагаем перенять ---
+      var svcLine = running
+        ? 'служба <b style="color:' + c.warn + ';">запущена</b> (' + esc(svc.name || '') + ')'
+        : (svc.name ? 'служба ' + esc(svc.name) + ' · ' + esc(svc.state) : 'служба не зарегистрирована, автозапуск включён');
+      return '<div style="display:flex;flex-direction:column;gap:12px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.warn + ';border-radius:12px;">' +
+        '<div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:' + c.warn + ';"></span>' +
+          '<span style="font:700 15px system-ui,sans-serif;color:' + c.textPrimary + ';">Обнаружен 2UTM — управляет ' + count + ' УТМ</span></div>' +
+        '<div style="font:12.5px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">Это предыдущий менеджер УТМ (' + svcLine + '). Пока он активен, на загрузке он и оркестратор будут <b>драться за ридеры</b>. Нажмите «Перенять управление» — оркестратор подхватит эти УТМ, а 2UTM будет <b>обратимо заглушён</b> (стоп службы + автозапуск off). Токены, папки УТМ и сами УТМ не трогаются.</div>' +
+        '<div style="display:flex;flex-direction:column;gap:6px;">' + rows + '</div>' +
+        '<div style="margin-top:2px;"><button data-action="adopt2Utm" style="background:' + c.ok + ';border:none;color:#fff;padding:10px 18px;border-radius:8px;font:600 13px system-ui,sans-serif;cursor:pointer;">Перенять управление у 2UTM</button></div>' +
+      '</div>';
+    }
+
+    // --- Состояние 2: управление перенято, 2UTM заглушён (папка ещё есть) ---
+    return '<div style="display:flex;flex-direction:column;gap:12px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.ok + ';border-radius:12px;">' +
+      '<div style="display:flex;align-items:center;gap:8px;"><span style="color:' + c.ok + ';font:700 15px system-ui,sans-serif;">✓</span>' +
+        '<span style="font:700 15px system-ui,sans-serif;color:' + c.textPrimary + ';">Управление перенято у 2UTM</span></div>' +
+      '<div style="font:12.5px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">2UTM <b>заглушён</b> (автозапуск off' + (svc.name ? ', служба ' + esc(svc.state) : '') + ') — на загрузке ' + count + ' УТМ поднимает оркестратор. Файлы 2UTM на месте, миграцию можно <b>откатить</b>.</div>' +
       '<div style="display:flex;flex-direction:column;gap:6px;">' + rows + '</div>' +
-      actions +
+      '<div style="margin-top:2px;"><button data-action="restore2Utm" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Вернуть 2UTM</button></div>' +
     '</div>';
   }
 
