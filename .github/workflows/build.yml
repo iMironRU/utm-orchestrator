@@ -1,23 +1,19 @@
 name: Build
 
-# Собирает продукт (C# оркестратор: служба + трей + CLI) самодостаточными
-# single-file exe под win-x64 и кладёт архив в релизы:
-#  - push в main         → обновляет катящийся пре-релиз с тегом "latest"
-#  - push тега vX.Y.Z    → постоянный версионный релиз
-# Инсталлятор берёт архив по стабильному URL:
-#  https://github.com/iMironRU/utm-orchestrator/releases/download/latest/UtmOrchestrator-win-x64.zip
+# Каждый пуш в main = версионный релиз v0.1.N (N = номер сборки CI), помеченный
+# как latest (не pre-release — мы вышли из альфы). Версия зашивается в exe и в
+# имена файлов. Setup.exe тянет пейлоад из последнего релиза через GitHub API.
 
 on:
   push:
     branches: [ main ]
-    tags:     [ 'v*' ]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: windows-latest          # net8.0-windows (WinForms-трей) собирается только на Windows
+    runs-on: windows-latest          # net8.0-windows (WinForms) собирается только на Windows
     permissions:
-      contents: write                # нужно для создания релизов
+      contents: write                # нужно для релизов
 
     steps:
       - uses: actions/checkout@v4
@@ -27,55 +23,58 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Publish (self-contained single-file win-x64)
+      - name: Compute version (0.1.N)
+        id: ver
+        shell: bash
+        run: echo "v=0.1.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish payload (self-contained single-file win-x64, versioned)
         working-directory: orchestrator
         shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.v }}
         run: bash publish.sh
 
       - name: Package payload zip
         shell: pwsh
-        run: Compress-Archive -Path orchestrator/dist/* -DestinationPath UtmOrchestrator-win-x64.zip -Force
+        run: Compress-Archive -Path orchestrator/dist/* -DestinationPath "UtmOrchestrator-win-x64-${{ steps.ver.outputs.v }}.zip" -Force
 
-      - name: Publish Setup.exe (self-contained — запускается на чистой машине без .NET)
+      - name: Publish Setup.exe (self-contained, versioned)
         shell: bash
         run: |
           dotnet publish orchestrator/src/UtmOrchestrator.Setup/UtmOrchestrator.Setup.csproj \
             -c Release -r win-x64 --self-contained true \
             -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
-            -p:EnableCompressionInSingleFile=true -o setup-out
-          cp setup-out/UtmOrchestrator-Setup.exe .
+            -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.ver.outputs.v }} -o setup-out
+          cp "setup-out/UtmOrchestrator-Setup.exe" "UtmOrchestrator-Setup-${{ steps.ver.outputs.v }}.exe"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: UtmOrchestrator-win-x64
+          name: UtmOrchestrator-${{ steps.ver.outputs.v }}
           path: |
-            UtmOrchestrator-win-x64.zip
-            UtmOrchestrator-Setup.exe
+            UtmOrchestrator-win-x64-${{ steps.ver.outputs.v }}.zip
+            UtmOrchestrator-Setup-${{ steps.ver.outputs.v }}.exe
           if-no-files-found: error
 
-      - name: Update rolling "latest" pre-release (main)
+      - name: Remove obsolete rolling 'latest' release (+ stale .jar)
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete latest --cleanup-tag --yes || true
+
+      - name: Create versioned release (per commit)
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: Последняя сборка (main)
+          tag_name: v${{ steps.ver.outputs.v }}
+          name: "УТМ:Оркестратор ${{ steps.ver.outputs.v }}"
           body: |
-            Автосборка из main. Коммит ${{ github.sha }}.
+            Сборка **${{ steps.ver.outputs.v }}** · коммит ${{ github.sha }}
 
-            Установка на новый компьютер: скачайте **UtmOrchestrator-Setup.exe** и запустите.
-          prerelease: true
-          make_latest: false
-          files: |
-            UtmOrchestrator-win-x64.zip
-            UtmOrchestrator-Setup.exe
-
-      - name: Create versioned release (tag vX.Y.Z)
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            UtmOrchestrator-win-x64.zip
-            UtmOrchestrator-Setup.exe
-          generate_release_notes: true
+            Установка на новый компьютер: скачайте **UtmOrchestrator-Setup-${{ steps.ver.outputs.v }}.exe** и запустите.
           make_latest: true
+          files: |
+            UtmOrchestrator-win-x64-${{ steps.ver.outputs.v }}.zip
+            UtmOrchestrator-Setup-${{ steps.ver.outputs.v }}.exe

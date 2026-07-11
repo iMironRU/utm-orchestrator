@@ -26,6 +26,9 @@ COMMON=(-c Release -r win-x64 --self-contained true
         -p:EnableCompressionInSingleFile=true
         -o "$OUT")
 
+# Версия из CI (0.1.N). Локально без VERSION — дефолт из Directory.Build.props.
+if [ -n "${VERSION:-}" ]; then COMMON+=(-p:Version="$VERSION"); fi
+
 for proj in Tray Service Cli; do
   echo "=== publish UtmOrchestrator.$proj ==="
   "$DOTNET" publish "src/UtmOrchestrator.$proj/UtmOrchestrator.$proj.csproj" "${COMMON[@]}"

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO.Compression;
 using System.Net.Http;
+using System.Text.Json;
 
 namespace UtmOrchestrator.Setup;
 
@@ -14,9 +15,11 @@ namespace UtmOrchestrator.Setup;
 /// </summary>
 public sealed class SetupForm : Form
 {
-    private const string ZipName = "UtmOrchestrator-win-x64.zip";
-    private const string ReleaseUrl =
-        "https://github.com/iMironRU/utm-orchestrator/releases/download/latest/UtmOrchestrator-win-x64.zip";
+    // Имя пейлоада теперь версионное (UtmOrchestrator-win-x64-0.1.N.zip), поэтому
+    // URL не фиксирован: спрашиваем последний релиз через GitHub API и берём его zip.
+    private const string LatestReleaseApi =
+        "https://api.github.com/repos/iMironRU/utm-orchestrator/releases/latest";
+    private const string PayloadPrefix = "UtmOrchestrator-win-x64";
     private const string PanelUrl = "http://localhost:8090";
 
     private readonly Button _btn;
@@ -130,19 +133,22 @@ public sealed class SetupForm : Form
 
     private async Task InstallAsync()
     {
-        // 1. Найти архив рядом (офлайн) или скачать из релиза.
-        string localZip = Path.Combine(AppContext.BaseDirectory, ZipName);
+        // 1. Найти архив рядом (офлайн, любой UtmOrchestrator-win-x64*.zip) или скачать
+        //    из последнего релиза (URL берём через GitHub API — имя версионное).
         string zipPath;
-        if (File.Exists(localZip))
+        string? localZip = Directory.EnumerateFiles(AppContext.BaseDirectory, PayloadPrefix + "*.zip").FirstOrDefault();
+        if (localZip is not null)
         {
             zipPath = localZip;
             Log($"Использую локальный архив: {localZip}");
         }
         else
         {
-            zipPath = Path.Combine(Path.GetTempPath(), ZipName);
+            SetStatus("Ищу последнюю версию на GitHub…");
+            string url = await ResolvePayloadUrlAsync();
+            zipPath = Path.Combine(Path.GetTempPath(), Path.GetFileName(new Uri(url).LocalPath));
             SetStatus("Скачиваю последнюю версию…");
-            await DownloadAsync(ReleaseUrl, zipPath);
+            await DownloadAsync(url, zipPath);
         }
 
         // 2. Распаковать во временную папку.
@@ -177,9 +183,31 @@ public sealed class SetupForm : Form
         try { Directory.Delete(staging, recursive: true); } catch { }
     }
 
+    // Находит URL zip-пейлоада в последнем релизе через GitHub API (имя версионное).
+    private async Task<string> ResolvePayloadUrlAsync()
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("UtmOrchestrator-Setup"); // GitHub API требует UA
+        string json = await http.GetStringAsync(LatestReleaseApi);
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.TryGetProperty("assets", out var assets))
+            foreach (var a in assets.EnumerateArray())
+            {
+                string name = a.GetProperty("name").GetString() ?? "";
+                if (name.StartsWith(PayloadPrefix) && name.EndsWith(".zip"))
+                {
+                    string url = a.GetProperty("browser_download_url").GetString()!;
+                    Log("Последний релиз: " + name);
+                    return url;
+                }
+            }
+        throw new Exception($"в последнем релизе нет архива {PayloadPrefix}*.zip");
+    }
+
     private async Task DownloadAsync(string url, string dest)
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("UtmOrchestrator-Setup");
         using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
         resp.EnsureSuccessStatusCode();
         long? total = resp.Content.Headers.ContentLength;
