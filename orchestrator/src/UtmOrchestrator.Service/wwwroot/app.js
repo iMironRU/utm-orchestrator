@@ -7,9 +7,9 @@
    Тематизация задаётся инлайн-стилями из объекта токенов colors(),
    чтобы пиксель-в-пиксель повторить дизайн-хэндофф.
 
-   Реальные данные: экран «Обзор» опрашивает /api/status каждые ~8с.
-   Остальные экраны работают на демо-данных (структуры совпадают с
-   реальными — их легко подключить к бэкенду позже, см. пометки TODO).
+   Данные — только живые: /api/status (УТМ, ~8с опрос) и /api/logs (логи).
+   Демо-данных нет. Ещё не реализованные действия честно говорят «в разработке»
+   (notReady), а не притворяются успехом.
    ===================================================================== */
 (function () {
   'use strict';
@@ -26,19 +26,13 @@
     theme: 'dark',                 // 'dark' | 'light' — единый глобальный источник
     isMobile: false,               // определяется через matchMedia
     screen: 'overview',            // текущий экран
-    selectedUtmId: 'u1',
-    installStep: 1,
-    installRunning: false,
-    installDone: false,
-    installPct: 0,
-    installLogIndex: 0,
+    selectedUtmId: null,           // выбранный УТМ (id из живого статуса)
     notifOpen: false,
     mobileNavOpen: false,
     confirmDeleteOpen: false,
     toast: null,
-    unreadCount: 3,
-    wizardAssignments: { '44f94b1a': '8080', 'a12c07e9': '8081', 'c390af41': '8085', '7fbb21d0': '8084', '9e02d7aa': '' },
-    firewallAuto: true,
+    unreadCount: 0,
+    firewallAuto: true,            // предпочтение «открывать порты в файрволе»
     remoteAccess: false,
     pinVisible: false,
     logsFilterPort: '',
@@ -50,8 +44,6 @@
     scanning: false,               // идёт скан
     healing: false,                // идёт лечение
     overviewFilter: null,          // null | 'problem'
-    rebindOpen: false,
-    rebindSelections: {},
 
     /* --- аутентификация «по галочке» (доп. требование продукта) --- */
     requireAuth: false,            // «Требовать вход в панель» — по умолчанию ВЫКЛ
@@ -72,55 +64,8 @@
     if (savedTheme === 'dark' || savedTheme === 'light') state.theme = savedTheme;
   } catch (e) {}
 
-  /* ====================== ДЕМО-ДАННЫЕ ======================
-     Используются на всех экранах кроме «Обзор». Формы совпадают с
-     реальными сущностями бэкенда — TODO: заменить на API-выборки. */
-  var utms = [
-    { id: 'u1', port: 8080, name: 'Магазин «Центральный»', fsrar: '030000903353', tokenSerial: '44f94b1a', status: 'ok', lastSync: '1 мин назад', version: '2.5.14', folder: 'C:\\UTM\\8080', internalPorts: '10501/10502' },
-    { id: 'u2', port: 8081, name: 'Склад №2', fsrar: '030000904521', tokenSerial: 'a12c07e9', status: 'ok', lastSync: '3 мин назад', version: '2.5.14', folder: 'C:\\UTM\\8081', internalPorts: '10503/10504' },
-    { id: 'u3', port: 8082, name: 'Магазин «Северный»', fsrar: '030000905810', tokenSerial: null, status: 'warn', reason: 'Токен вернулся — требуется привязка к УТМ', version: '2.5.12', folder: 'C:\\UTM\\8082', internalPorts: '10505/10506' },
-    { id: 'u4', port: 8083, name: 'Магазин «Южный»', fsrar: '030000906204', tokenSerial: null, status: 'error', reason: 'Токен вынут — вставьте обратно в USB-порт', lastSync: '41 мин назад', version: '2.5.12', folder: 'C:\\UTM\\8083', internalPorts: '10507/10508' },
-    { id: 'u5', port: 8084, name: 'Точка «Аэропорт Т2»', fsrar: '030000907330', tokenSerial: '7fbb21d0', status: 'stopped', stoppedAt: '09.07 в 18:40', version: '2.5.10', folder: 'C:\\UTM\\8084', internalPorts: '10509/10510' },
-    { id: 'u6', port: 8085, name: 'Магазин «Речной»', fsrar: '030000908115', tokenSerial: 'c390af41', status: 'progress', progressLabel: 'Обновление до версии 2.5.14', progress: 63, version: '2.5.9', folder: 'C:\\UTM\\8085', internalPorts: '10511/10512' },
-  ];
-
-  var tokens = [
-    { serial: '44f94b1a', fsrar: '030000903353', bound: '8080', present: true },
-    { serial: 'a12c07e9', fsrar: '030000904521', bound: '8081', present: true },
-    { serial: '7fbb21d0', fsrar: null, bound: '8084', present: true },
-    { serial: 'c390af41', fsrar: '030000908115', bound: '8085', present: true },
-    { serial: '9e02d7aa', fsrar: '030000909902', bound: null, present: true },
-    { serial: 'ожидается', fsrar: null, bound: '8082', present: false },
-  ];
-
-  var notificationsData = [
-    { id: 1, time: '14:31', level: 'error', text: 'Порт 8083 — токен вынут из USB' },
-    { id: 2, time: '14:20', level: 'warn', text: 'Порт 8082 — токен подключён повторно, ждёт привязки' },
-    { id: 3, time: '13:55', level: 'info', text: 'Порт 8085 — начато обновление до версии 2.5.14' },
-    { id: 4, time: '09:10', level: 'info', text: 'Порт 8084 — остановлен пользователем' },
-  ];
-
-  var logLines = [
-    { t: '14:32:07', port: 8080, level: 'info', msg: 'Обмен с ЕГАИС выполнен успешно' },
-    { t: '14:31:52', port: 8083, level: 'error', msg: 'Потеряна связь с токеном' },
-    { t: '14:29:10', port: 8082, level: 'warn', msg: 'Токен обнаружен, ФСРАР ещё не сопоставлен' },
-    { t: '14:20:44', port: 8081, level: 'info', msg: 'Обмен с ЕГАИС выполнен успешно' },
-    { t: '13:55:01', port: 8085, level: 'info', msg: 'Запущено обновление УТМ 2.5.9 → 2.5.14' },
-    { t: '13:40:22', port: 8080, level: 'info', msg: 'Служба УТМ перезапущена по расписанию' },
-    { t: '09:10:03', port: 8084, level: 'info', msg: 'УТМ остановлен пользователем admin' },
-    { t: '08:02:15', port: 8083, level: 'error', msg: 'Ошибка ключа: токен физически отсутствует' },
-  ];
-
-  var installLogs = [
-    'Копирование файлов УТМ…',
-    'Регистрация службы: порт 8080…',
-    'Регистрация службы: порт 8081…',
-    'Регистрация службы: порт 8082…',
-    'Привязка токена 8080 → 030000903353…',
-    'Привязка токена 8081 → 030000904521…',
-    'Проверка соединения с ЕГАИС…',
-    'Готово.',
-  ];
+  /* Все экраны работают на ЖИВЫХ данных: УТМ — из /api/status, логи — из /api/logs,
+     токены/уведомления — производные от статуса. Демо-массивов больше нет. */
 
   /* ====================== ТОКЕНЫ ЦВЕТА ====================== */
   function colors() {
@@ -354,7 +299,7 @@
       overview: ['Обзор', 'Все ваши УТМ в одном месте'],
       utm: ['УТМ', 'Список всех УТМ на этом компьютере'],
       tokens: ['Токены', 'Подключённые аппаратные ключи'],
-      install: ['Установка УТМ', 'Шаг ' + state.installStep + ' из 5'],
+      install: ['Установка УТМ', 'обследование и добавление'],
       updates: ['Обновления', 'Версии УТМ и оркестратора'],
       logs: ['Логи', 'События всех УТМ'],
       settings: ['Настройки', 'Безопасность, расписание, доступ'],
@@ -434,11 +379,15 @@
   }
 
   /* ====================== ЭКРАН: ОБЗОР (живые данные) ====================== */
-  /* Источник УТМ для экранов «УТМ»/детали: живые данные, если служба ответила,
-     иначе демо-набор (чтобы интерфейс оставался наглядным офлайн). */
-  function utmSource() {
-    if (state.liveStatus && state.liveStatus.instances) return liveUtms();
-    return utms;
+  /* Единственный источник УТМ — живой статус службы. Пока служба не ответила,
+     возвращаем пусто, а экраны показывают «Загрузка…» (dataLoaded()). Никаких
+     демо-данных: раньше здесь мелькали фейковые «магазины» до первого ответа. */
+  function dataLoaded() { return !!(state.liveStatus && state.liveStatus.instances); }
+  function utmSource() { return dataLoaded() ? liveUtms() : []; }
+
+  function loadingCard(c) {
+    return '<div style="padding:22px;background:' + c.cardBg + ';border:1px solid ' + c.border +
+      ';border-radius:12px;font:13px system-ui,sans-serif;color:' + c.textTertiary + ';">Загрузка данных…</div>';
   }
 
   function selectedUtm() {
@@ -558,6 +507,7 @@
 
   /* ====================== ЭКРАН: УТМ — СПИСОК ====================== */
   function utmListScreen(c) {
+    if (!dataLoaded()) return loadingCard(c);
     var rows = utmSource().map(function (u) {
       var v = buildUtmView(u, c);
       return '<div data-action="openUtm" data-id="' + esc(v.id) + '" style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:10px;cursor:pointer;flex-wrap:wrap;">' +
@@ -619,38 +569,12 @@
       infoCell('Токен', sel.tokenDisplay, true) +
     '</div>';
 
-    // Кастомный дропдаун «Перепривязать токен»
-    var currentRebind = state.rebindSelections[state.selectedUtmId] || sel.tokenSerial;
-    var rebindOptions = tokens.filter(function (t) { return t.present; }).map(function (t) {
-      var isSel = t.serial === currentRebind;
-      return {
-        serial: t.serial,
-        label: (t.fsrar || 'нет ФСРАР') + ' (' + t.serial + ')',
-        isSel: isSel,
-        rowBg: isSel ? c.brandBg : 'transparent',
-        checkMark: isSel ? '✓' : '',
-      };
-    });
-    var selectedOpt = rebindOptions.find(function (o) { return o.isSel; });
-    var rebindLabel = selectedOpt ? selectedOpt.label : 'Выбрать токен';
-    var rebindList = state.rebindOpen
-      ? '<div data-pop="1" style="position:absolute;top:100%;left:0;margin-top:4px;min-width:230px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:8px;box-shadow:0 12px 28px rgba(0,0,0,.22);z-index:40;overflow:hidden;">' +
-          rebindOptions.map(function (o) {
-            return '<div data-action="selectRebind" data-serial="' + esc(o.serial) + '" style="display:flex;align-items:center;gap:8px;padding:9px 12px;cursor:pointer;font:12.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textPrimary + ';background:' + o.rowBg + ';">' +
-              '<span style="width:14px;flex-shrink:0;color:' + c.brand + ';">' + o.checkMark + '</span><span>' + esc(o.label) + '</span></div>';
-          }).join('') +
-        '</div>'
-      : '';
-
-    // Перепривязку токена показываем ТОЛЬКО для неработающего УТМ — у живого её делать нельзя.
+    // Перепривязку показываем ТОЛЬКО для неработающего УТМ (у живого её делать нельзя).
+    // Реальная перепривязка (introduce на другой токен) — на подходе; пока честная
+    // пометка вместо фейкового дропдауна «токен привязан».
     var rebindBlock = (sel.status === 'ok') ? '' :
-      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:6px;border-top:1px solid ' + c.border + ';">' +
-        '<span style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">Перепривязать токен:</span>' +
-        '<div data-pop="1" style="position:relative;">' +
-          '<button data-action="toggleRebind" style="display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:210px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:7px 12px;border-radius:7px;font:12.5px ui-monospace,Menlo,Consolas,monospace;cursor:pointer;">' +
-            '<span>' + esc(rebindLabel) + '</span><span style="color:' + c.textTertiary + ';font-family:system-ui,sans-serif;">▾</span></button>' +
-          rebindList +
-        '</div>' +
+      '<div style="padding-top:8px;border-top:1px solid ' + c.border + ';font:12.5px/1.55 system-ui,sans-serif;color:' + c.textSecondary + ';">' +
+        'Перепривязка токена к этому УТМ — <b style="color:' + c.textPrimary + ';">в разработке</b>. Пока используйте «Полечить токены» (перезапуск смарт-карт и подъём) или перезапуск УТМ.' +
       '</div>';
 
     var actions = '<div style="display:flex;flex-direction:column;gap:12px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
@@ -684,6 +608,7 @@
      Реальные данные из статуса: один токен = привязанный УТМ. Без PKCS11-скана
      (он опасен на занятых токенах) — состояние токена берём из здоровья УТМ. */
   function tokensScreen(c) {
+    if (!dataLoaded()) return loadingCard(c);
     var src = utmSource();
     var views = src.map(function (u) { return buildUtmView(u, c); });
 
@@ -788,88 +713,14 @@
     '</div>';
   }
 
-  function installStep1(c) {
-    return '<div style="display:flex;flex-direction:column;gap:14px;padding:18px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
-      '<div style="display:flex;align-items:center;gap:10px;">' +
-        '<div style="width:34px;height:34px;border-radius:50%;background:' + c.okBg + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;"><div style="width:9px;height:9px;border-radius:50%;background:' + c.ok + ';"></div></div>' +
-        '<div style="font:600 14px system-ui,sans-serif;color:' + c.textPrimary + ';">Компьютер проверен: чисто, УТМ не найдены</div>' +
-      '</div>' +
-      '<div style="display:flex;flex-direction:column;gap:8px;">' +
-        '<label style="display:flex;align-items:center;gap:10px;font:13px system-ui,sans-serif;color:' + c.textPrimary + ';cursor:pointer;"><input type="radio" name="mode" checked/>Установить с нуля</label>' +
-        '<label style="display:flex;align-items:center;gap:10px;font:13px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;"><input type="radio" name="mode"/>Подхватить существующие УТМ, если найдутся</label>' +
-      '</div></div>';
-  }
-
-  function installStep2(c) {
-    var rows = tokens.filter(function (t) { return t.present; }).map(function (t) {
-      var cur = state.wizardAssignments[t.serial] || '';
-      var opts = ['', '8080', '8081', '8082', '8083', '8084', '8085'].map(function (p) {
-        var label = p === '' ? 'Не назначен' : p;
-        return '<option value="' + p + '"' + (String(cur) === p ? ' selected' : '') + '>' + label + '</option>';
-      }).join('');
-      return '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 12px;background:' + c.subtleBg + ';border-radius:8px;flex-wrap:wrap;">' +
-        '<div style="font:13px ui-monospace,Menlo,Consolas,monospace;color:' + c.textPrimary + ';">' + esc(t.serial) + ' <span style="color:' + c.textTertiary + ';">· ' + esc(t.fsrar || 'нет ФСРАР') + '</span></div>' +
-        '<select data-action="wizardAssign" data-serial="' + esc(t.serial) + '" style="background:' + c.cardBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:6px 10px;border-radius:7px;font:12.5px system-ui,sans-serif;">' + opts + '</select>' +
-      '</div>';
-    }).join('');
-    return '<div style="display:flex;flex-direction:column;gap:10px;padding:18px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
-      '<div style="font:600 13.5px system-ui,sans-serif;color:' + c.textPrimary + ';margin-bottom:4px;">Сопоставьте токены с портами</div>' + rows + '</div>';
-  }
-
-  function installStep3(c) {
-    function pinRow(serial) {
-      return '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><span style="width:130px;font:12.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textSecondary + ';">' + serial + '</span>' +
-        '<input type="password" placeholder="PIN" style="flex:1;min-width:120px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:8px 10px;border-radius:7px;font:13px system-ui,sans-serif;"/></div>';
-    }
-    return '<div style="display:flex;flex-direction:column;gap:16px;padding:18px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
-      '<div><div style="font:600 13px system-ui,sans-serif;color:' + c.textPrimary + ';margin-bottom:8px;">PIN-коды токенов</div>' +
-      '<div style="display:flex;flex-direction:column;gap:8px;">' + pinRow('44f94b1a') + pinRow('a12c07e9') + '</div></div>' +
-      '<div style="display:flex;align-items:center;justify-content:space-between;padding-top:12px;border-top:1px solid ' + c.border + ';">' +
-        '<span style="font:13px system-ui,sans-serif;color:' + c.textPrimary + ';">Открыть порты в файрволе</span>' +
-        segmented(c, [
-          { label: 'Да', active: state.firewallAuto, action: 'setFirewallYes' },
-          { label: 'Нет', active: !state.firewallAuto, action: 'setFirewallNo' },
-        ]) +
-      '</div></div>';
-  }
-
-  function installStep4(c) {
-    var startDisabled = state.installRunning || state.installDone;
-    var startLabel = state.installDone ? 'Завершено ✓' : (state.installRunning ? 'Идёт установка…' : 'Начать установку');
-    var logs = installLogs.map(function (text, i) {
-      var isDone = i < state.installLogIndex;
-      var isActive = i === state.installLogIndex && state.installRunning;
-      var isPending = !isDone && !isActive;
-      var icon;
-      if (isDone) icon = '<div style="width:16px;height:16px;border-radius:50%;background:' + c.okBg + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;"><div style="width:5px;height:5px;border-radius:50%;background:' + c.ok + ';"></div></div>';
-      else if (isActive) icon = '<div style="width:16px;height:16px;border-radius:50%;border:2px solid ' + c.brand + ';border-top-color:transparent;flex-shrink:0;animation:spin .7s linear infinite;"></div>';
-      else icon = '<div style="width:16px;height:16px;border-radius:50%;background:' + c.subtleBg + ';flex-shrink:0;"></div>';
-      var textColor = isPending ? c.textTertiary : c.textPrimary;
-      return '<div style="display:flex;align-items:center;gap:10px;">' + icon +
-        '<span style="font:12.5px ui-monospace,Menlo,Consolas,monospace;color:' + textColor + ';">' + esc(text) + '</span></div>';
-    }).join('');
-    return '<div style="display:flex;flex-direction:column;gap:14px;padding:18px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
-      '<div style="display:flex;align-items:center;justify-content:space-between;">' +
-        '<div style="font:600 13.5px system-ui,sans-serif;color:' + c.textPrimary + ';">Установка и привязка</div>' +
-        '<button data-action="startInstall"' + (startDisabled ? ' disabled' : '') + ' style="background:' + c.brand + ';opacity:' + (startDisabled ? 0.5 : 1) + ';border:none;color:#fff;padding:8px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:' + (startDisabled ? 'default' : 'pointer') + ';">' + startLabel + '</button>' +
-      '</div>' +
-      '<div style="height:6px;border-radius:3px;background:' + c.subtleBg + ';overflow:hidden;"><div style="height:100%;width:' + state.installPct + '%;background:' + c.brand + ';border-radius:3px;transition:width .3s;"></div></div>' +
-      '<div style="display:flex;flex-direction:column;gap:9px;">' + logs + '</div></div>';
-  }
-
-  function installStep5(c) {
-    var rows = utms.map(function (u) {
-      return '<div style="display:flex;align-items:center;justify-content:space-between;padding:11px 12px;background:' + c.subtleBg + ';border-radius:8px;flex-wrap:wrap;gap:8px;">' +
-        '<span style="font:13px ui-monospace,Menlo,Consolas,monospace;color:' + c.textPrimary + ';">порт ' + esc(u.port) + '</span>' +
-        '<span style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">ФСРАР ' + esc(u.fsrar) + ' ✓</span>' +
-        '<span style="font:600 12.5px system-ui,sans-serif;color:' + c.ok + ';">обмен с ЕГАИС ✓</span></div>';
-    }).join('');
-    return '<div style="display:flex;flex-direction:column;gap:10px;padding:18px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
-      '<div style="font:600 13.5px system-ui,sans-serif;color:' + c.textPrimary + ';margin-bottom:4px;">Итоговая проверка</div>' + rows + '</div>';
-  }
+  // Старый пятишаговый мастер-мокап (installStep1..5) удалён: он симулировал установку
+  // на демо-данных и говорил «успешно» ничего не сделав. Реальное добавление УТМ —
+  // в installScreen (скан токенов через трей + подхват существующих). Полный мастер
+  // «с нуля» (назначение порта + регистрация службы + introduce) — в беклоге.
 
   /* ====================== ЭКРАН: ОБНОВЛЕНИЯ (реальные версии) ====================== */
   function updatesScreen(c) {
+    if (!dataLoaded()) return loadingCard(c);
     var d = state.liveStatus;
     var orchVer = (d && d.orchestratorVersion) ? d.orchestratorVersion : '—';
     var orchestrator = '<div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 18px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;flex-wrap:wrap;">' +
@@ -1145,16 +996,17 @@
   }
 
   /* ====================== ТОСТЫ ====================== */
-  var toastTimer, installTimer;
+  var toastTimer;
   function showToast(msg) {
     setState({ toast: msg });
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { setState({ toast: null }); }, 2600);
   }
+  // Честная заглушка: функция ещё не реализована — не притворяемся успехом.
+  function notReady(what) { showToast((what || 'Функция') + ' — в разработке'); }
 
   /* ====================== ДЕЙСТВИЯ ====================== */
-  function clearInstallTimer() { clearInterval(installTimer); }
-  function setScreen(s) { clearInstallTimer(); setState({ screen: s, mobileNavOpen: false, notifOpen: false }); }
+  function setScreen(s) { setState({ screen: s, mobileNavOpen: false, notifOpen: false }); }
 
   var actions = {
     /* навигация */
@@ -1165,13 +1017,10 @@
     goLogs: function () { setScreen('logs'); loadLogs(); },
     refreshLogs: function () { state.logs = null; render(); loadLogs(); },
     goSettings: function () { setScreen('settings'); if (!state.settingsLoaded) loadSettings(); },
-    goInstall: function () {
-      clearInstallTimer();
-      setState({ screen: 'install', installStep: 1, installRunning: false, installDone: false, installPct: 0, installLogIndex: 0, mobileNavOpen: false, notifOpen: false });
-    },
+    goInstall: function () { setState({ screen: 'install', mobileNavOpen: false, notifOpen: false }); },
 
     openUtm: function (el) { setState({ screen: 'utm-detail', selectedUtmId: el.getAttribute('data-id'), mobileNavOpen: false, notifOpen: false }); },
-    openLogsFor: function (el) { clearInstallTimer(); setState({ screen: 'logs', logsSearch: String(el.getAttribute('data-port') || ''), mobileNavOpen: false, notifOpen: false }); loadLogs(); },
+    openLogsFor: function (el) { setState({ screen: 'logs', logsSearch: String(el.getAttribute('data-port') || ''), mobileNavOpen: false, notifOpen: false }); loadLogs(); },
     openUtmWeb: function (el) {
       var port = el.getAttribute('data-port');
       if (port) window.open('http://localhost:' + port + '/', '_blank');
@@ -1190,7 +1039,8 @@
 
     /* вход */
     login: function () {
-      // TODO: call backend auth endpoint (POST /api/auth/login) с username/password
+      // Локальный вход в панель (гейт requireAuth). Серверная проверка пароля —
+      // отдельная задача; пока панель доступна только с localhost/разрешённых IP.
       setState({ authed: true });
       showToast('Добро пожаловать');
     },
@@ -1199,7 +1049,7 @@
     filterProblems: function () { setState({ overviewFilter: 'problem' }); },
     clearOverviewFilter: function () { setState({ overviewFilter: null }); },
     recheckAll: function () { showToast('Проверка запущена…'); pollStatus(); },
-    raiseAll: function () { /* TODO: call backend (поднять все УТМ) */ showToast('Поднимаю все УТМ…'); },
+    raiseAll: function () { notReady('Поднять все УТМ разом'); },
     utmPrimary: function (el) {
       var label = el.getAttribute('data-label');
       var service = el.getAttribute('data-service');
@@ -1218,22 +1068,13 @@
         }).catch(function () { showToast('Не удалось запустить перезапуск'); });
         return;
       }
-      // Прочие действия (запуск/привязка) — пока заглушка.
-      showToast(label + ' — ' + name);
+      // Прочие первичные действия (запуск/привязка) пока не реализованы — честно.
+      notReady(label);
     },
 
     /* деталь УТМ */
-    stopUtm: function () { /* TODO: call backend (стоп службы) */ showToast('УТМ остановлен'); },
-    savePort: function () { /* TODO: call backend (смена порта) */ showToast('Порт обновлён — потребуется перезапуск'); },
-    toggleRebind: function () { setState({ rebindOpen: !state.rebindOpen }); },
-    selectRebind: function (el) {
-      var serial = el.getAttribute('data-serial');
-      var sels = Object.assign({}, state.rebindSelections);
-      sels[state.selectedUtmId] = serial;
-      // TODO: call backend (перепривязка токена)
-      setState({ rebindSelections: sels, rebindOpen: false });
-      showToast('Токен привязан к УТМ');
-    },
+    stopUtm: function () { notReady('Остановка УТМ'); },
+    savePort: function () { notReady('Смена порта'); },
     /* краткое название УТМ (ключ — серийник токена) */
     saveName: function () {
       var input = document.getElementById('name-edit-input');
@@ -1248,10 +1089,10 @@
     },
     openDeleteConfirm: function () { setState({ confirmDeleteOpen: true }); },
     closeDeleteConfirm: function () { setState({ confirmDeleteOpen: false }); },
-    confirmDelete: function () { /* TODO: call backend (удаление УТМ) */ setState({ confirmDeleteOpen: false, screen: 'utm' }); showToast('УТМ удалён'); },
+    confirmDelete: function () { setState({ confirmDeleteOpen: false }); notReady('Удаление УТМ'); },
 
     /* токены */
-    resetReaders: function () { /* TODO: call backend (сброс ридеров) */ showToast('Ридеры перезапущены — сканирование токенов…'); },
+    resetReaders: function () { notReady('Сброс ридеров (используйте «Полечить токены»)'); },
 
     /* Скан токенов через трей (для установки/обследования). */
     scanTokens: function () {
@@ -1289,45 +1130,13 @@
       });
     },
 
-    /* мастер установки */
-    wizardAssign: function (el) {
-      var serial = el.getAttribute('data-serial');
-      var a = Object.assign({}, state.wizardAssignments);
-      a[serial] = el.value;
-      state.wizardAssignments = a; // без ре-рендера (select сам держит значение)
-    },
+    /* настройка файрвола (предпочтение; применение при установке УТМ) */
     setFirewallYes: function () { setState({ firewallAuto: true }); },
     setFirewallNo: function () { setState({ firewallAuto: false }); },
-    startInstall: function () {
-      if (state.installRunning || state.installDone) return;
-      setState({ installRunning: true, installPct: 0, installLogIndex: 0, installDone: false });
-      var total = installLogs.length;
-      clearInstallTimer();
-      installTimer = setInterval(function () {
-        var nextIndex = Math.min(total, state.installLogIndex + 1);
-        var pct = Math.round((nextIndex / total) * 100);
-        if (nextIndex >= total) {
-          clearInterval(installTimer);
-          setState({ installLogIndex: nextIndex, installPct: 100, installRunning: false, installDone: true });
-        } else {
-          setState({ installLogIndex: nextIndex, installPct: pct });
-        }
-      }, 650);
-    },
-    wizardPrev: function () { setState({ installStep: Math.max(1, state.installStep - 1) }); },
-    wizardNext: function () {
-      if (state.installStep >= 5) {
-        clearInstallTimer();
-        setState({ screen: 'overview', installStep: 1, installRunning: false, installDone: false, installPct: 0, installLogIndex: 0 });
-        showToast('УТМ успешно добавлены');
-        return;
-      }
-      setState({ installStep: Math.min(5, state.installStep + 1) });
-    },
 
-    /* обновления */
-    updateOrchestrator: function () { /* TODO: call backend */ showToast('Оркестратор обновляется…'); },
-    updateUtm: function (el) { /* TODO: call backend */ showToast('Обновление УТМ ' + el.getAttribute('data-port') + ' запущено'); },
+    /* обновления — реальное обновление в беклоге, пока честно */
+    updateOrchestrator: function () { notReady('Обновление оркестратора'); },
+    updateUtm: function () { notReady('Обновление УТМ'); },
 
     /* логи */
     onLogsPort: function (el) { setState({ logsFilterPort: el.value }); },
@@ -1338,7 +1147,7 @@
       var list = document.getElementById('logs-list');
       if (list) list.innerHTML = logsListHTML(colors());
     },
-    downloadLogs: function () { /* TODO: call backend (экспорт логов) */ showToast('Файл логов сохранён'); },
+    downloadLogs: function () { notReady('Экспорт логов'); },
 
     /* настройки */
     setRemoteOn: function () { setState({ remoteAccess: true }); },
@@ -1387,9 +1196,9 @@
         runAction(actionEl.getAttribute('data-action'), actionEl, e);
         return;
       }
-      // клик вне поповеров закрывает уведомления / дропдаун перепривязки
+      // клик вне поповеров закрывает панель уведомлений
       if (!e.target.closest('[data-pop]')) {
-        if (state.notifOpen || state.rebindOpen) setState({ notifOpen: false, rebindOpen: false });
+        if (state.notifOpen) setState({ notifOpen: false });
       }
     });
 

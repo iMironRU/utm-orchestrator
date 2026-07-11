@@ -79,6 +79,7 @@ public sealed class BootBringUpWorker : BackgroundService
         // SCardSvr) — в отдельном потоке, чтобы не блокировать хост/панель.
         await Task.Run(() =>
         {
+            using var _ = BringUpStatus.Begin(); // панель/трей покажут «Запускается…», не «Сбой»
             try
             {
                 var result = BootBringUp.ApplyIntroduce(targets, Log);

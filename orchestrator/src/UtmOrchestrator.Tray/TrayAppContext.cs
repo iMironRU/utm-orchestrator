@@ -58,10 +58,12 @@ public sealed class TrayAppContext : ApplicationContext
             var snap = await StatusProvider.GetAsync();
 
             // 4 дизайнерских состояния иконки: ok / error / busy / disconnected.
-            // Ok → ok; Warn и Fault → error (нужно внимание); нет данных → disconnected.
+            // Ok → ok; Starting (идёт подъём) → busy; Warn и Fault → error (нужно
+            // внимание); нет данных / служба стоит → disconnected.
             _notify.Icon = snap.Overall switch
             {
                 OverallStatus.Ok => _ok,
+                OverallStatus.Starting => _busyIcon,
                 OverallStatus.Warn => _error,
                 OverallStatus.Fault => _error,
                 _ => _disconnected,

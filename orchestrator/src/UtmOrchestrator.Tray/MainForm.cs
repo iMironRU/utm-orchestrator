@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Drawing;
 using UtmOrchestrator.Core;
-using UtmOrchestrator.Core.Health;
 using UtmOrchestrator.Core.Services;
 
 namespace UtmOrchestrator.Tray;
@@ -82,10 +81,13 @@ public sealed class MainForm : Form
             FullRowSelect = true,
             HeaderStyle = ColumnHeaderStyle.Nonclickable,
             MultiSelect = false,
+            ShowItemToolTips = true, // длинную причину показываем во всплывающей подсказке
         };
-        _list.Columns.Add("УТМ", 150);
-        _list.Columns.Add("Порт", 55);
-        _list.Columns.Add("Состояние", 200);
+        _list.Columns.Add("УТМ", 220);
+        _list.Columns.Add("Порт", 50);
+        _list.Columns.Add("Состояние", 120);
+        // Колонку «УТМ» тянем по ширине окна, чтобы длинные имена не резались.
+        _list.Resize += (_, _) => FitColumns();
 
         // --- Кнопки ---
         var buttons = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 2 };
@@ -139,6 +141,16 @@ public sealed class MainForm : Form
         root.Controls.Add(buttons, 0, 4);
         root.Controls.Add(about, 0, 5);
         Controls.Add(root);
+    }
+
+    // «Состояние» и «Порт» фиксированы, «УТМ» занимает остаток ширины.
+    private void FitColumns()
+    {
+        if (_list.Columns.Count < 3) return;
+        int port = 50, state = 120;
+        _list.Columns[1].Width = port;
+        _list.Columns[2].Width = state;
+        _list.Columns[0].Width = Math.Max(140, _list.ClientSize.Width - port - state - 4);
     }
 
     private static Label MakeDot() => new()
@@ -228,6 +240,7 @@ public sealed class MainForm : Form
         {
             OverallStatus.Ok => Color.FromArgb(46, 160, 80),
             OverallStatus.Warn => Color.FromArgb(200, 140, 0),
+            OverallStatus.Starting => Color.FromArgb(70, 110, 210),
             OverallStatus.Fault => Color.FromArgb(200, 60, 60),
             _ => Color.Gray,
         };
@@ -235,33 +248,29 @@ public sealed class MainForm : Form
 
         _list.BeginUpdate();
         _list.Items.Clear();
-        foreach (var h in s.Utms)
+        foreach (var r in s.Utms)
         {
             var item = new ListViewItem(new[]
             {
-                h.Instance.ServiceName,
-                h.Instance.Port > 0 ? h.Instance.Port.ToString() : "-",
-                VerdictRu(h.Verdict) + (string.IsNullOrEmpty(h.Reason) ? "" : " — " + h.Reason),
+                r.Name,
+                r.Port > 0 ? r.Port.ToString() : "-",
+                r.StateText,
             });
-            item.ForeColor = h.Verdict switch
+            // Полная причина — в подсказке, чтобы не резалась в таблице.
+            if (!string.IsNullOrEmpty(r.Detail)) item.ToolTipText = r.Detail;
+            item.ForeColor = r.Kind switch
             {
-                HealthVerdict.Ok => Color.FromArgb(46, 130, 70),
-                HealthVerdict.Faulty => Color.FromArgb(190, 50, 50),
-                HealthVerdict.Stopped => Color.Gray,
+                RowKind.Ok => Color.FromArgb(46, 130, 70),
+                RowKind.Starting => Color.FromArgb(70, 110, 210),
+                RowKind.Fault => Color.FromArgb(190, 50, 50),
+                RowKind.Stopped => Color.Gray,
                 _ => Color.FromArgb(170, 120, 0),
             };
             _list.Items.Add(item);
         }
         _list.EndUpdate();
+        FitColumns();
     }
-
-    private static string VerdictRu(HealthVerdict v) => v switch
-    {
-        HealthVerdict.Ok => "Работает",
-        HealthVerdict.Stopped => "Остановлен",
-        HealthVerdict.Faulty => "Сбой",
-        _ => "—",
-    };
 
     private static string ServiceStateRu(ServiceState st) => st switch
     {

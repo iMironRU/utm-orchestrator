@@ -89,6 +89,7 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
         total = health.Count,
         ok,
         faulty = health.Count - ok,
+        bringUp = BringUpStatus.Active, // идёт подъём/перепривязка — «не отвечает» это норма
         orchestratorVersion = UtmOrchestrator.Core.AppInfo.Version,
         instances = list,
     });
@@ -174,6 +175,7 @@ app.MapPost("/api/utm/restart", (RestartRequest req) =>
 
     _ = Task.Run(() =>
     {
+        using var _ = BringUpStatus.Begin(); // пока идёт перезапуск — «Запускается…», не «Сбой»
         try { BootBringUp.RestartOne(target, allReaders, ReaderOp.FileLog); }
         catch (Exception e) { ReaderOp.FileLog($"restart {req.Service}: СБОЙ — {e}"); }
         finally { ReaderOp.Gate.Release(); }
