@@ -47,10 +47,33 @@ switch (command)
     case "pcsctest":
         PcscTest();
         break;
+    case "detect2utm":
+        Detect2Utm();
+        break;
     default:
         Console.WriteLine($"Неизвестная команда: {command}");
         Console.WriteLine("Доступно: scan, readers, status, discover, savebindings, bringup <verify|apply>");
         break;
+}
+
+// Обнаружить 2UTM и распарсить его config.ini (read-only) — для миграции.
+static void Detect2Utm()
+{
+    string? folder = UtmOrchestrator.Core.Migration.TwoUtmConfig.FindFolder();
+    Console.WriteLine($"Папка 2UTM: {folder ?? "не найдена"}");
+    var svc = UtmOrchestrator.Core.Migration.TwoUtmConfig.FindService();
+    Console.WriteLine($"Служба 2UTM: {(svc is null ? "не зарегистрирована" : $"{svc.Value.Name} (StartMode={svc.Value.StartMode})")}");
+
+    string? cfgPath = UtmOrchestrator.Core.Migration.TwoUtmConfig.FindConfigPath();
+    if (cfgPath is null) { Console.WriteLine("config.ini не найден."); return; }
+    var cfg = UtmOrchestrator.Core.Migration.TwoUtmConfig.Load(cfgPath);
+    if (cfg is null) { Console.WriteLine("config.ini не прочитан."); return; }
+
+    Console.WriteLine($"config.ini: {cfg.ConfigPath}");
+    Console.WriteLine($"  autostart={cfg.Autostart}  countUTM={cfg.CountUtm}  разобрано УТМ={cfg.Utms.Count}");
+    Console.WriteLine($"  {"UTM",-6} {"port",-6} {"serial(hex)",-14} {"reader(attr)",-22} nameReader");
+    foreach (var u in cfg.Utms)
+        Console.WriteLine($"  UTM_{u.Index,-3} {u.Port,-6} {u.SerialHex,-14} {u.AttrReader,-22} {u.NameReader}");
 }
 
 // Собрать привязки (служба↔порт↔ФСРАР↔серийник) из живого discovery и сохранить
