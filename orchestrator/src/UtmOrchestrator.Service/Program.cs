@@ -80,7 +80,10 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
             org = orgDisplay,        // адрес/организация из сертификата (или null)
             inn = org?.Inn,
             folder = h.Instance.FolderPath,   // папка УТМ
-            version = h.Info?.Version,        // версия УТМ (из /api/info/list)
+            // Точная версия СБОРКИ (напр. 4.27.668) из SPA-бандла УТМ; запасной вариант
+            // — версия формата из /api/info/list (4.2.0).
+            version = UtmOrchestrator.Core.Diagnostics.UtmBuildVersion.Read(h.Instance.FolderPath) ?? h.Info?.Version,
+            formatVersion = h.Info?.Version,  // версия формата (4.2.0)
             firewallOpen = OperatingSystem.IsWindows()
                 && UtmOrchestrator.Core.Firewall.FirewallInspector.IsOpen(h.Instance.Port), // порт открыт в брандмауэре?
         });
