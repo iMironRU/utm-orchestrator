@@ -81,6 +81,8 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
             inn = org?.Inn,
             folder = h.Instance.FolderPath,   // папка УТМ
             version = h.Info?.Version,        // версия УТМ (из /api/info/list)
+            firewallOpen = OperatingSystem.IsWindows()
+                && UtmOrchestrator.Core.Firewall.FirewallInspector.IsOpen(h.Instance.Port), // порт открыт в брандмауэре?
         });
     }
 
@@ -183,6 +185,69 @@ app.MapPost("/api/utm/restart", (RestartRequest req) =>
     return Results.Accepted(value: new { ok = true, started = req.Service });
 });
 
+// --- Файрвол: открыть/закрыть порт УТМ (наше правило; служба = LocalSystem = админ) ---
+app.MapPost("/api/utm/firewall", (FirewallRequest req) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Service)) return Results.BadRequest(new { error = "service обязателен" });
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var inst = state.Instances.FirstOrDefault(i =>
+        string.Equals(i.ServiceName, req.Service, StringComparison.OrdinalIgnoreCase));
+    if (inst is null) return Results.NotFound(new { error = $"УТМ {req.Service} не найден" });
+    if (inst.Port <= 0) return Results.BadRequest(new { error = "у УТМ нет порта" });
+    UtmOrchestrator.Core.Firewall.FirewallManager.SetPort(inst.Port, req.Open, ReaderOp.FileLog);
+    return Results.Ok(new { ok = true, port = inst.Port, open = req.Open });
+});
+
+// --- Смена внешнего порта УТМ (session-0): конфиги + брандмауэр + introduce-рестарт ---
+// В фоне под общим замком ридеров; фронт увидит результат по опросу /api/status.
+app.MapPost("/api/utm/port", (ChangePortRequest req) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Service)) return Results.BadRequest(new { error = "service обязателен" });
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    if (req.NewPort < 1 || req.NewPort > 65535) return Results.BadRequest(new { error = "порт вне диапазона 1-65535" });
+
+    var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var inst = state.Instances.FirstOrDefault(i =>
+        string.Equals(i.ServiceName, req.Service, StringComparison.OrdinalIgnoreCase));
+    if (inst is null) return Results.NotFound(new { error = $"УТМ {req.Service} не найден" });
+    if (string.IsNullOrEmpty(inst.ReaderName))
+        return Results.BadRequest(new { error = "нет ReaderName — смена порта через introduce невозможна" });
+    if (inst.Port == req.NewPort) return Results.BadRequest(new { error = "порт не изменился" });
+    if (state.Instances.Any(i => i.Port == req.NewPort && !ReferenceEquals(i, inst)))
+        return Results.Conflict(new { error = $"порт {req.NewPort} уже занят другим УТМ" });
+
+    if (!ReaderOp.Gate.Wait(0))
+        return Results.Conflict(new { error = "уже идёт операция с ридерами — попробуйте позже" });
+
+    int oldPort = inst.Port;
+    string folder = inst.FolderPath ?? "";
+    var allReaders = state.Instances.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
+
+    _ = Task.Run(() =>
+    {
+        using var _ = BringUpStatus.Begin();
+        try
+        {
+            var r = UtmOrchestrator.Core.Recovery.PortChanger.Change(
+                folder, inst.ServiceName, oldPort, req.NewPort,
+                inst.TokenSerial, inst.ExpectedFsrar, inst.ReaderName, allReaders, ReaderOp.FileLog);
+            if (r.Success)
+            {
+                var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+                var i2 = st.Instances.FirstOrDefault(i =>
+                    string.Equals(i.ServiceName, req.Service, StringComparison.OrdinalIgnoreCase));
+                if (i2 is not null) { i2.Port = req.NewPort; st.Save(OrchestratorState.DefaultPath); }
+                ReaderOp.FileLog($"смена порта {req.Service}: успех ({oldPort}->{req.NewPort}), state.json обновлён");
+            }
+            else ReaderOp.FileLog($"смена порта {req.Service}: НЕ УДАЛОСЬ — {r.Message}");
+        }
+        catch (Exception e) { ReaderOp.FileLog($"смена порта {req.Service}: СБОЙ — {e}"); }
+        finally { ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true, service = req.Service, newPort = req.NewPort });
+});
+
 // --- Очередь интерактивных заданий (веб ↔ трей) ---
 // Веб кладёт задание (scan/heal), трей (в интерактивной сессии) забирает pending,
 // выполняет и возвращает результат, веб опрашивает по id. Только localhost.
@@ -251,6 +316,8 @@ app.Run();
 
 record SetNameRequest(string Serial, string? Name);
 record RestartRequest(string Service);
+record FirewallRequest(string Service, bool Open);
+record ChangePortRequest(string Service, int NewPort);
 record JobCreateRequest(string Type, string? Params);
 record JobResultRequest(string? Result, string? Error);
 record AdoptToken(string? Serial, string? Fsrar, string? Reader);

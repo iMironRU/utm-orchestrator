@@ -159,6 +159,7 @@
         reason: inst.reason || (st === 'warn' ? 'Требуется внимание' : ''),
         version: inst.version || '—',
         folder: inst.folder || '',
+        firewallOpen: inst.firewallOpen === true,
         lastSync: 'только что',
         stoppedAt: 'остановлен',
         progressLabel: inst.reason || 'Идёт операция',
@@ -199,6 +200,7 @@
       tokenDisplay: u.tokenSerial ? ('Rutoken · ' + u.tokenSerial) : 'нет токена',
       tokenSerial: u.tokenSerial,
       folder: u.folder, version: u.version, internalPorts: u.internalPorts,
+      firewallOpen: u.firewallOpen === true,
       statusLabel: meta.label, statusColor: meta.color, statusBg: meta.bg, status: u.status,
       dotAnim: (u.status === 'warn' || u.status === 'progress') ? 'animation:pulseDot 1.4s ease-in-out infinite;' : '',
       isProgress: isProgress, hasCallout: hasCallout, hasMeta: hasMeta, hasExchange: hasExchange,
@@ -479,11 +481,13 @@
           '<div style="width:6px;height:6px;border-radius:50%;background:' + u.statusColor + ';flex-shrink:0;"></div>' +
           '<span style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">' + esc(u.exchangeText) + '</span></div>'
       : '';
-    return '<div style="min-width:0;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:10px;padding:18px 18px 14px;display:flex;flex-direction:column;gap:12px;">' +
+    // Вся плитка кликабельна → карточка УТМ. Внутренние ссылки перехватывают клик
+    // сами (делегирование берёт ближайший [data-action]), так что они остаются рабочими.
+    return '<div data-action="openUtm" data-id="' + esc(u.id) + '" title="Открыть карточку УТМ" style="min-width:0;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:10px;padding:18px 18px 14px;display:flex;flex-direction:column;gap:12px;cursor:pointer;">' +
       '<div style="display:flex;flex-direction:column;gap:8px;min-width:0;">' +
         '<div style="font:700 15px/1.3 system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(u.name) + '</div>' +
         '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">' +
-          '<div style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">порт ' + esc(u.port) + '</div>' +
+          '<div style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">порт ' + esc(u.port) + (u.version ? ' · v' + esc(u.version) : '') + '</div>' +
           statusPill(u, c) +
         '</div></div>' +
       callout + metaBlock + progress + exchange +
@@ -514,7 +518,7 @@
         '<div style="display:flex;align-items:center;gap:14px;min-width:0;">' +
           '<div style="width:9px;height:9px;border-radius:50%;background:' + v.statusColor + ';flex-shrink:0;' + v.dotAnim + '"></div>' +
           '<div style="min-width:0;"><div style="font:700 14.5px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(v.name) + '</div>' +
-          '<div style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';margin-top:2px;">порт ' + esc(v.port) + ' · ФСРАР ' + esc(v.fsrarDisplay) + '</div></div>' +
+          '<div style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';margin-top:2px;">порт ' + esc(v.port) + ' · ФСРАР ' + esc(v.fsrarDisplay) + (v.version ? ' · v' + esc(v.version) : '') + '</div></div>' +
         '</div>' +
         '<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:20px;background:' + v.statusBg + ';flex-shrink:0;"><span style="font:600 12px system-ui,sans-serif;color:' + v.statusColor + ';">' + esc(v.statusLabel) + '</span></div>' +
       '</div>';
@@ -560,8 +564,12 @@
       orgLine + nameField +
     '</div>';
 
+    // Порт — кликабельный: открывает веб самого УТМ (как «Открыть УТМ ↗»).
+    var portCell = '<div style="min-width:0;overflow:hidden;"><div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';margin-bottom:3px;">Порт</div>' +
+      '<a data-action="openUtmWeb" data-port="' + esc(sel.port) + '" title="Открыть веб-интерфейс УТМ" style="font:13.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.brand + ';cursor:pointer;text-decoration:none;">' + esc(sel.port) + ' ↗</a></div>';
+
     var info = '<div style="display:grid;grid-template-columns:' + infoCols + ';gap:12px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
-      infoCell('Порт', sel.port, true) +
+      portCell +
       infoCell('Организация', sel.org || '—', false) +
       infoCell('Версия УТМ', sel.version, false) +
       infoCell('Папка', sel.folder || '—', true) +
@@ -587,6 +595,33 @@
       rebindBlock +
     '</div>';
 
+    // --- Порт и брандмауэр ---
+    var fwOpen = sel.firewallOpen;
+    var fwColor = fwOpen ? c.ok : c.warn;
+    var fwText = fwOpen ? 'открыт' : 'закрыт';
+    var fwBtn = '<button data-action="toggleFirewall" data-service="' + esc(sel.service) + '" data-open="' + (fwOpen ? '0' : '1') + '" ' +
+      'style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:7px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">' +
+      (fwOpen ? 'Закрыть порт' : 'Открыть порт') + '</button>';
+    var portCard = '<div style="display:flex;flex-direction:column;gap:14px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
+      '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Порт и доступ</div>' +
+      // статус брандмауэра + переключатель
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">' +
+        '<div style="display:flex;align-items:center;gap:8px;font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">' +
+          '<span style="width:9px;height:9px;border-radius:50%;background:' + fwColor + ';flex-shrink:0;"></span>' +
+          'Порт ' + esc(sel.port) + ' в брандмауэре ОС: <b style="color:' + fwColor + ';">' + fwText + '</b></div>' +
+        fwBtn +
+      '</div>' +
+      // смена порта
+      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:10px;border-top:1px solid ' + c.border + ';">' +
+        '<span style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">Изменить порт:</span>' +
+        '<input id="port-edit-input" type="number" min="1" max="65535" value="' + esc(sel.port) + '" ' +
+          'style="width:110px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:7px 10px;border-radius:7px;font:13px ui-monospace,Menlo,Consolas,monospace;"/>' +
+        '<button data-action="changePort" data-service="' + esc(sel.service) + '" ' +
+          'style="background:' + c.brand + ';border:none;color:#fff;padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Изменить порт</button>' +
+      '</div>' +
+      '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">Смена порта перезапустит УТМ (~1 мин, обмен прервётся), поправит его конфиг и перенесёт правило брандмауэра.</div>' +
+    '</div>';
+
     var danger = '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:' + c.errorSoftBg + ';border:1px solid ' + c.error + ';border-radius:12px;flex-wrap:wrap;gap:10px;">' +
       '<div><div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Удалить УТМ</div>' +
       '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:2px;">Необратимо: настройки и привязка токена будут удалены</div></div>' +
@@ -594,7 +629,7 @@
 
     return '<div style="display:flex;flex-direction:column;gap:16px;">' +
       '<div data-action="goUtm" style="font:600 12.5px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">← Все УТМ</div>' +
-      statusPillWide(sel, c) + callout + nameCard + info + actions + danger +
+      statusPillWide(sel, c) + callout + nameCard + info + portCard + actions + danger +
     '</div>';
   }
 
@@ -626,7 +661,8 @@
       var borderColor = (st === 'error' || (!hasToken)) ? color : c.border;
       var serialDisp = hasToken ? 'Rutoken · ' + v.tokenSerial : 'серийник неизвестен';
       var sub = (v.fsrarDisplay && v.fsrarDisplay !== '—' ? 'ФСРАР ' + v.fsrarDisplay : 'ФСРАР —') +
-                ' · ' + (v.service ? v.service + ' :' + v.port : 'порт ' + v.port);
+                ' · ' + (v.service ? v.service + ' :' + v.port : 'порт ' + v.port) +
+                (v.version ? ' · v' + v.version : '');
 
       // Для сбойного токена — точечный перезапуск УТМ (introduce, служба session 0).
       var action = (st === 'error' && v.service)
@@ -1074,7 +1110,41 @@
 
     /* деталь УТМ */
     stopUtm: function () { notReady('Остановка УТМ'); },
-    savePort: function () { notReady('Смена порта'); },
+    /* Файрвол: открыть/закрыть порт УТМ (правит наше правило через службу). */
+    toggleFirewall: function (el) {
+      var service = el.getAttribute('data-service');
+      var open = el.getAttribute('data-open') === '1';
+      showToast(open ? 'Открываю порт в брандмауэре…' : 'Закрываю порт в брандмауэре…');
+      fetch('/api/utm/firewall', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ service: service, open: open }),
+      })
+        .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+        .then(function (d) { showToast(d.open ? 'Порт открыт в брандмауэре' : 'Порт закрыт в брандмауэре'); pollStatus(true); })
+        .catch(function () { showToast('Не удалось изменить правило брандмауэра'); });
+    },
+    /* Смена внешнего порта УТМ (перезапуск через introduce на новом порту). */
+    changePort: function (el) {
+      var input = document.getElementById('port-edit-input');
+      if (!input) return;
+      var sel = selectedUtm();
+      var newPort = parseInt(input.value, 10);
+      if (!(newPort >= 1 && newPort <= 65535)) { showToast('Порт должен быть в диапазоне 1–65535'); return; }
+      if (newPort === sel.port) { showToast('Порт не изменился'); return; }
+      if (!window.confirm('Сменить порт «' + sel.name + '» с ' + sel.port + ' на ' + newPort + '?\nУТМ перезапустится (~1 мин), обмен с ЕГАИС прервётся.')) return;
+      showToast('Меняю порт на ' + newPort + '…');
+      fetch('/api/utm/port', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ service: sel.service, newPort: newPort }),
+      })
+        .then(function (r) {
+          if (r.status === 409) { showToast('Порт занят или идёт другая операция — подождите'); return; }
+          if (r.status === 400) { return r.json().then(function (d) { showToast(d.error || 'Некорректный порт'); }); }
+          if (!r.ok) throw new Error();
+          showToast('Смена порта запущена — статус обновится автоматически');
+        })
+        .catch(function () { showToast('Не удалось сменить порт'); });
+    },
     /* краткое название УТМ (ключ — серийник токена) */
     saveName: function () {
       var input = document.getElementById('name-edit-input');
