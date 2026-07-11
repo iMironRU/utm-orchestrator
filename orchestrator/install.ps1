@@ -8,6 +8,9 @@
 param([string]$Dst = 'C:\UtmOrchestrator')
 $ErrorActionPreference = 'Stop'
 $src = $PSScriptRoot
+# Вывод в UTF-8, чтобы кириллица в логе установщика (Setup.exe читает stdout как UTF-8)
+# не превращалась в кракозябры.
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
 Write-Host "Установка УТМ:Оркестратор → $Dst" -ForegroundColor Cyan
 

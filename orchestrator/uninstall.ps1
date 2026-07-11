@@ -8,6 +8,7 @@
 #>
 param([string]$Dst = 'C:\UtmOrchestrator', [switch]$Purge)
 $ErrorActionPreference = 'SilentlyContinue'
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
 Write-Host "Удаление УТМ:Оркестратор" -ForegroundColor Cyan
 

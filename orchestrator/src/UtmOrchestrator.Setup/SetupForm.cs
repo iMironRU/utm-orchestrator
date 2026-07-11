@@ -241,6 +241,10 @@ public sealed class SetupForm : Form
             CreateNoWindow = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            // install.ps1 переключает вывод в UTF-8 — читаем так же, иначе кириллица
+            // в логе превращается в кракозябры.
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8,
             WorkingDirectory = Path.GetDirectoryName(scriptPath)!,
         };
         using var p = new Process { StartInfo = psi };
