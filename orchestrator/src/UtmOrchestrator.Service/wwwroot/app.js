@@ -683,7 +683,7 @@
       ? '<button disabled style="opacity:.6;background:' + c.brand + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;">Лечение идёт…</button>'
       : '<button data-action="healTokens" style="background:' + c.brand + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Полечить токены</button>';
     var note = '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;flex-wrap:wrap;">' +
-      '<div style="flex:1;min-width:180px;font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Если токен «завис» — «Полечить токены»: перезапуск службы смарт-карт и подъём УТМ. Выполняется через приложение в трее (потребуется подтверждение прав).</div>' +
+      '<div style="flex:1;min-width:180px;font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Если токен «завис» — «Полечить токены»: перезапуск службы смарт-карт и подъём всех УТМ. Делает служба сама (~1-2 мин, обмен со всеми УТМ на это время прервётся).</div>' +
       healBtn + '</div>';
 
     return '<div style="display:flex;flex-direction:column;gap:14px;">' + note + rows + '</div>';
@@ -1188,16 +1188,21 @@
         .catch(function () { showToast('Не удалось подхватить'); });
     },
 
-    /* Полечить токены через трей (рестарт SCardSvr + подъём; требует UAC). */
+    /* Полечить токены — через службу (рестарт SCardSvr + introduce-подъём всех).
+       Без UAC: служба LocalSystem делает это сама. Блипнёт все УТМ на ~1-2 мин. */
     healTokens: function () {
       if (state.healing) return;
-      if (!window.confirm('Полечить токены?\nСлужба смарт-карт перезапустится, обмен на ~минуту прервётся.\nВ приложении в трее потребуется подтвердить права (UAC).')) return;
+      if (!window.confirm('Полечить токены?\nСлужба смарт-карт перезапустится, обмен со ВСЕМИ УТМ прервётся на ~1-2 минуты.')) return;
       setState({ healing: true });
-      showToast('Запускаю лечение через трей — подтвердите UAC…');
-      runJob('heal', function (res, err) {
-        setState({ healing: false });
-        showToast(err ? err : 'Лечение запущено — статус обновится автоматически');
-      });
+      showToast('Лечение: перезапуск смарт-карт и подъём УТМ…');
+      fetch('/api/utm/heal', { method: 'POST' })
+        .then(function (r) {
+          if (r.status === 409) { showToast('Уже идёт операция с ридерами — подождите'); return; }
+          if (!r.ok) throw new Error();
+          showToast('Лечение запущено — статус обновится автоматически (~1-2 мин)');
+        })
+        .catch(function () { showToast('Не удалось запустить лечение'); })
+        .then(function () { setState({ healing: false }); });
     },
 
     /* настройка файрвола (предпочтение; применение при установке УТМ) */

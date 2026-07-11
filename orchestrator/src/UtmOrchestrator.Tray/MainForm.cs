@@ -186,34 +186,29 @@ public sealed class MainForm : Form
         catch (Exception e) { MessageBox.Show(this, "Не удалось открыть панель: " + e.Message, Text); }
     }
 
-    private void HealTokens()
+    private async void HealTokens()
     {
         var r = MessageBox.Show(this,
             "«Полечить токены» перезапустит службу смарт-карт и заново поднимет все УТМ " +
-            "(обмен на ~несколько минут прервётся). Выполнить сейчас?",
+            "(обмен со всеми УТМ прервётся на ~1-2 минуты). Выполнить сейчас?",
             "Полечить токены", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-        if (r == DialogResult.Yes)
-            RunElevated("heal", "Лечение токенов (перезапуск смарт-карт + подъём УТМ)");
-    }
+        if (r != DialogResult.Yes) return;
 
-    // Действия, которым нужна интерактивная сессия + права администратора, запускаем
-    // как отдельный процесс CLI с повышением (UAC). CLI лежит рядом с треем.
-    private void RunElevated(string cliArgs, string title)
-    {
-        string cli = Path.Combine(AppContext.BaseDirectory, "UtmOrchestrator.Cli.exe");
-        if (!File.Exists(cli))
-        {
-            MessageBox.Show(this, "Не найден UtmOrchestrator.Cli.exe рядом с приложением.", Text);
-            return;
-        }
+        // Лечение делает служба (LocalSystem) сама — UAC не нужен, просто POST.
         try
         {
-            Process.Start(new ProcessStartInfo(cli, cliArgs) { UseShellExecute = true, Verb = "runas" });
+            using var http = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            var resp = await http.PostAsync(PanelUrl + "/api/utm/heal", null);
+            if (resp.IsSuccessStatusCode)
+                MessageBox.Show(this, "Лечение запущено. Статус обновится в панели через ~1-2 минуты.", Text);
+            else if ((int)resp.StatusCode == 409)
+                MessageBox.Show(this, "Уже идёт операция с ридерами — попробуйте чуть позже.", Text);
+            else
+                MessageBox.Show(this, "Служба не приняла запрос на лечение.", Text);
         }
         catch (Exception e)
         {
-            // отказ UAC или отсутствие команды
-            MessageBox.Show(this, $"{title}: не удалось запустить — {e.Message}", Text);
+            MessageBox.Show(this, "Не удалось запустить лечение: " + e.Message, Text);
         }
     }
 

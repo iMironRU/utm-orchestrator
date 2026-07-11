@@ -248,6 +248,38 @@ app.MapPost("/api/utm/port", (ChangePortRequest req) =>
     return Results.Accepted(value: new { ok = true, service = req.Service, newPort = req.NewPort });
 });
 
+// --- Полечить токены: рестарт SCardSvr (будит замёрзшие) + introduce-подъём всех ---
+// Служба (LocalSystem) делает это сама — UAC/трей не нужны. Это НЕ PKCS11-скан, а
+// рестарт службы + introduce (session-0-safe, как boot-подъём). Фон, под общим замком.
+app.MapPost("/api/utm/heal", () =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var targets = state.Instances
+        .Where(i => !string.IsNullOrEmpty(i.TokenSerial))
+        .Select(i => new BootBringUp.Target(i.ServiceName, i.Port, i.TokenSerial!, i.ExpectedFsrar, i.ReaderName))
+        .ToList();
+    if (targets.Count == 0) return Results.BadRequest(new { error = "нет привязок в state.json" });
+
+    if (!ReaderOp.Gate.Wait(0))
+        return Results.Conflict(new { error = "уже идёт операция с ридерами — попробуйте позже" });
+
+    _ = Task.Run(() =>
+    {
+        using var _ = BringUpStatus.Begin();
+        try
+        {
+            ReaderOp.FileLog("=== heal (лечение токенов) через службу запущен ===");
+            UtmOrchestrator.Core.Readers.ReaderReset.ResetToNative(targets.Select(t => t.Service), ReaderOp.FileLog);
+            var r = BootBringUp.ApplyIntroduce(targets, ReaderOp.FileLog);
+            ReaderOp.FileLog($"heal: поднято {r.Started.Count}, ошибок {r.Failed.Count}, успех={r.Success}");
+        }
+        catch (Exception e) { ReaderOp.FileLog($"heal: СБОЙ — {e}"); }
+        finally { ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true, healing = true });
+});
+
 // --- Очередь интерактивных заданий (веб ↔ трей) ---
 // Веб кладёт задание (scan/heal), трей (в интерактивной сессии) забирает pending,
 // выполняет и возвращает результат, веб опрашивает по id. Только localhost.

@@ -51,11 +51,9 @@ public sealed class JobPoller : IDisposable
                 switch (job.type)
                 {
                     case "scan":
+                        // Скан токенов (PKCS11) требует интерактивной сессии — делает трей.
+                        // (Лечение/heal теперь делает служба сама, через трей не идёт.)
                         result = RunCli("scan-json", elevated: false, capture: true);
-                        break;
-                    case "heal":
-                        RunCli("heal", elevated: true, capture: false); // UAC-запрос у оператора
-                        result = "{\"started\":true}";
                         break;
                     default:
                         error = "неизвестный тип задания: " + job.type;
