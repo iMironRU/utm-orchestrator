@@ -132,4 +132,22 @@ public sealed class TwoUtmConfig
         => ulong.TryParse(dec, NumberStyles.Integer, CultureInfo.InvariantCulture, out ulong n)
             ? n.ToString("x")
             : dec.Trim();
+
+    /// <summary>Правит строку autostart=... в config.ini (не трогая остальное).</summary>
+    public static void SetAutostart(string path, bool value, Action<string>? log = null)
+    {
+        if (!File.Exists(path)) return;
+        var lines = File.ReadAllLines(path);
+        bool changed = false;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            var t = lines[i].TrimStart();
+            if (t.StartsWith("autostart", StringComparison.OrdinalIgnoreCase) && t.Contains('='))
+            {
+                lines[i] = "autostart=" + (value ? "true" : "false");
+                changed = true;
+            }
+        }
+        if (changed) { File.WriteAllLines(path, lines); log?.Invoke($"2UTM config: autostart={value}"); }
+    }
 }

@@ -398,6 +398,91 @@ app.MapPost("/api/setup/adopt", async (AdoptRequest req, SerialCache serials, Ca
     return Results.Ok(new { total = instances.Count, matched });
 });
 
+// --- Миграция с 2UTM: статус (детект + разбор config.ini + сопоставление с Transport) ---
+app.MapGet("/api/2utm/status", async (SerialCache serials, CancellationToken ct) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.Json(new { present = false });
+    string? folder = UtmOrchestrator.Core.Migration.TwoUtmConfig.FindFolder();
+    if (folder is null) return Results.Json(new { present = false });
+
+    var svc = UtmOrchestrator.Core.Migration.TwoUtmConfig.FindService();
+    string? svcName = svc?.Name;
+    string svcState = svcName is not null
+        ? UtmOrchestrator.Core.Services.ServiceControl.GetState(svcName).ToString() : "NotInstalled";
+
+    string? cfgPath = UtmOrchestrator.Core.Migration.TwoUtmConfig.FindConfigPath();
+    var cfg = cfgPath is not null ? UtmOrchestrator.Core.Migration.TwoUtmConfig.Load(cfgPath) : null;
+
+    var discovered = (await UtmDiscovery.DiscoverAsync(ct, scanTokens: false, serials)).ToList();
+    var byPort = discovered.Where(i => i.Port > 0).ToDictionary(i => i.Port);
+
+    var utms = new List<object>();
+    int matched = 0;
+    foreach (var u in cfg?.Utms ?? (IReadOnlyList<UtmOrchestrator.Core.Migration.TwoUtmConfig.Utm>)Array.Empty<UtmOrchestrator.Core.Migration.TwoUtmConfig.Utm>())
+    {
+        byPort.TryGetValue(u.Port, out var inst);
+        if (inst is not null) matched++;
+        utms.Add(new { index = u.Index, port = u.Port, serial = u.SerialHex, reader = u.AttrReader,
+            matchedService = inst?.ServiceName, fsrar = inst?.ExpectedFsrar });
+    }
+
+    return Results.Json(new
+    {
+        present = true, folder,
+        service = new { name = svcName, state = svcState, startMode = svc?.StartMode ?? "-" },
+        autostart = cfg?.Autostart ?? false,
+        count = cfg?.CountUtm ?? 0,
+        matched, utms,
+    });
+});
+
+// --- Перенять управление у 2UTM: adopt из config → state.json + заглушить 2UTM ---
+app.MapPost("/api/2utm/adopt", async (SerialCache serials, CancellationToken ct) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    string? cfgPath = UtmOrchestrator.Core.Migration.TwoUtmConfig.FindConfigPath();
+    var cfg = cfgPath is not null ? UtmOrchestrator.Core.Migration.TwoUtmConfig.Load(cfgPath) : null;
+    if (cfg is null) return Results.NotFound(new { error = "config.ini 2UTM не найден" });
+
+    if (!ReaderOp.Gate.Wait(0))
+        return Results.Conflict(new { error = "уже идёт операция с ридерами — попробуйте позже" });
+    try
+    {
+        var byPort = cfg.Utms.ToDictionary(u => u.Port);
+        var instances = (await UtmDiscovery.DiscoverAsync(ct, scanTokens: false, serials)).ToList();
+        int matched = 0;
+        foreach (var inst in instances)
+            if (byPort.TryGetValue(inst.Port, out var u))
+            {
+                inst.TokenSerial = u.SerialHex;
+                inst.ReaderName = u.AttrReader;
+                if (!string.IsNullOrEmpty(inst.ExpectedFsrar)) serials.Learn(inst.ExpectedFsrar!, u.SerialHex);
+                matched++;
+            }
+        new OrchestratorState { Instances = instances }.Save(OrchestratorState.DefaultPath);
+        ReaderOp.FileLog($"2UTM adopt: подхвачено {matched} из {cfg.Utms.Count}");
+
+        // заглушить 2UTM (обратимо) — чтобы на загрузке не дрался с нами за ридеры
+        var svc = UtmOrchestrator.Core.Migration.TwoUtmConfig.FindService();
+        if (svc is not null)
+            UtmOrchestrator.Core.Migration.TwoUtmControl.Disable(svc.Value.Name, cfgPath, ReaderOp.FileLog);
+
+        return Results.Ok(new { ok = true, matched, total = cfg.Utms.Count, disabled = svc?.Name });
+    }
+    finally { ReaderOp.Gate.Release(); }
+});
+
+// --- Вернуть 2UTM (откат миграции): Automatic + autostart=true + старт ---
+app.MapPost("/api/2utm/restore", () =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    var svc = UtmOrchestrator.Core.Migration.TwoUtmConfig.FindService();
+    if (svc is null) return Results.NotFound(new { error = "служба 2UTM не найдена" });
+    string? cfgPath = UtmOrchestrator.Core.Migration.TwoUtmConfig.FindConfigPath();
+    UtmOrchestrator.Core.Migration.TwoUtmControl.Restore(svc.Value.Name, cfgPath, ReaderOp.FileLog);
+    return Results.Ok(new { ok = true, restored = svc.Value.Name });
+});
+
 app.Run();
 
 record SetNameRequest(string Serial, string? Name);
