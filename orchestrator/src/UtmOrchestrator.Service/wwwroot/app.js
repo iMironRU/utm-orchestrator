@@ -46,6 +46,9 @@
     logsSearch: '',
     logs: null,                    // реальные логи из /api/logs (null = ещё не грузили)
     settingsLoaded: false,         // подгружены ли настройки с бэка
+    scannedTokens: null,           // результат скана токенов трея (null = не сканировали)
+    scanning: false,               // идёт скан
+    healing: false,                // идёт лечение
     overviewFilter: null,          // null | 'problem'
     rebindOpen: false,
     rebindSelections: {},
@@ -715,9 +718,12 @@
       '</div>';
     }).join('');
 
-    var note = '<div style="display:flex;align-items:flex-start;gap:8px;padding:12px 14px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;">' +
-      '<div style="font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Если токен «завис» (система его не видит) — «Полечить токены» в приложении в трее ' +
-      '(значок УТМ:Оркестратор → «Полечить токены»): оно перезапускает службу смарт-карт. Из веб-панели это сделать нельзя.</div></div>';
+    var healBtn = state.healing
+      ? '<button disabled style="opacity:.6;background:' + c.brand + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;">Лечение идёт…</button>'
+      : '<button data-action="healTokens" style="background:' + c.brand + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Полечить токены</button>';
+    var note = '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;flex-wrap:wrap;">' +
+      '<div style="flex:1;min-width:180px;font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Если токен «завис» — «Полечить токены»: перезапуск службы смарт-карт и подъём УТМ. Выполняется через приложение в трее (потребуется подтверждение прав).</div>' +
+      healBtn + '</div>';
 
     return '<div style="display:flex;flex-direction:column;gap:14px;">' + note + rows + '</div>';
   }
@@ -739,13 +745,36 @@
         '<div style="font:13px/1.55 system-ui,sans-serif;color:' + c.textPrimary + ';padding-top:1px;">' + esc(s) + '</div></div>';
     }).join('');
 
+    // Рабочий скан токенов через трей (связка веб↔трей).
+    var scanBtn = state.scanning
+      ? '<button disabled style="opacity:.6;background:' + c.brand + ';border:none;color:#fff;padding:10px 18px;border-radius:8px;font:600 13px system-ui,sans-serif;">Сканирую токены…</button>'
+      : '<button data-action="scanTokens" style="background:' + c.brand + ';border:none;color:#fff;padding:10px 18px;border-radius:8px;font:600 13px system-ui,sans-serif;cursor:pointer;">Сканировать токены сейчас</button>';
+    var scanResult = '';
+    if (state.scannedTokens) {
+      if (!state.scannedTokens.length) {
+        scanResult = '<div style="font:12.5px system-ui,sans-serif;color:' + c.textTertiary + ';padding:10px 12px;background:' + c.subtleBg + ';border-radius:8px;">Токены не найдены. Вставьте токен в USB и повторите скан.</div>';
+      } else {
+        scanResult = '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">Найдено токенов: ' + state.scannedTokens.length + '</div>' +
+          state.scannedTokens.map(function (t) {
+            return '<div style="display:flex;flex-direction:column;gap:2px;padding:10px 12px;background:' + c.subtleBg + ';border-radius:8px;">' +
+              '<div style="font:13px ui-monospace,Menlo,Consolas,monospace;color:' + c.textPrimary + ';">Rutoken · ' + esc(t.serial) + '</div>' +
+              '<div style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';">ФСРАР ' + esc(t.fsrar || '—') + ' · ридер ' + esc(t.reader || '—') + '</div></div>';
+          }).join('');
+      }
+    }
+    var scanCard = '<div style="display:flex;flex-direction:column;gap:12px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
+      '<div style="font:700 14px system-ui,sans-serif;color:' + c.textPrimary + ';">Токены на компьютере</div>' +
+      '<div style="font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Читаются через приложение в трее (интерактивно). Работает, когда панель открыта с самого компьютера и трей запущен.</div>' +
+      '<div>' + scanBtn + '</div>' + scanResult +
+    '</div>';
+
     return '<div style="display:flex;flex-direction:column;gap:16px;">' +
       '<div style="display:flex;flex-direction:column;gap:14px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
         '<div style="font:700 15px system-ui,sans-serif;color:' + c.textPrimary + ';">Установка нового УТМ</div>' +
-        '<div style="font:12.5px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">Добавление УТМ выполняется в приложении в трее — там читается физический токен. Это разовая операция у машины (когда вы подключаете новый токен).</div>' +
+        '<div style="font:12.5px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">Добавление УТМ читает физический токен, поэтому выполняется в интерактивной сессии (через трей). Полный мастер с назначением порта — на подходе; уже сейчас можно отсканировать подключённые токены.</div>' +
         '<div style="display:flex;flex-direction:column;gap:12px;margin-top:4px;">' + list + '</div>' +
       '</div>' +
-      '<div style="padding:12px 14px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;font:12px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">Позже установку можно будет запускать прямо отсюда (панель делегирует чтение токена трею).</div>' +
+      scanCard +
     '</div>';
   }
 
@@ -884,6 +913,28 @@
       .then(function (r) { return r.json(); })
       .then(function (d) { state.logs = d.lines || []; if (state.screen === 'logs') render(); })
       .catch(function () { state.logs = []; if (state.screen === 'logs') render(); });
+  }
+
+  /* Связка веб↔трей: создать интерактивное задание и дождаться результата.
+     onDone(resultObj|null, errorText|null). Требует запущенный трей (он «руки»). */
+  function runJob(type, onDone) {
+    fetch('/api/jobs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: type }),
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { if (d && d.id) pollJob(d.id, onDone, 0); else onDone(null, 'Не удалось создать задание'); })
+      .catch(function () { onDone(null, 'Служба недоступна'); });
+  }
+  function pollJob(id, onDone, tries) {
+    if (tries > 80) { onDone(null, 'Трей не ответил. Запущено ли приложение в трее? Откройте панель с самого компьютера.'); return; }
+    fetch('/api/jobs/' + id, { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.state === 'Done') { var obj = null; try { obj = d.result ? JSON.parse(d.result) : {}; } catch (e) {} onDone(obj, null); }
+        else if (d.state === 'Error') onDone(null, d.error || 'ошибка задания');
+        else setTimeout(function () { pollJob(id, onDone, tries + 1); }, 1500);
+      })
+      .catch(function () { setTimeout(function () { pollJob(id, onDone, tries + 1); }, 1500); });
   }
 
   /* Настройки панели (реальные, /api/settings). */
@@ -1191,6 +1242,29 @@
 
     /* токены */
     resetReaders: function () { /* TODO: call backend (сброс ридеров) */ showToast('Ридеры перезапущены — сканирование токенов…'); },
+
+    /* Скан токенов через трей (для установки/обследования). */
+    scanTokens: function () {
+      if (state.scanning) return;
+      setState({ scanning: true, scannedTokens: null });
+      showToast('Сканирую токены (через приложение в трее)…');
+      runJob('scan', function (res, err) {
+        if (err) { setState({ scanning: false }); showToast(err); return; }
+        setState({ scanning: false, scannedTokens: (res && res.tokens) || [] });
+      });
+    },
+
+    /* Полечить токены через трей (рестарт SCardSvr + подъём; требует UAC). */
+    healTokens: function () {
+      if (state.healing) return;
+      if (!window.confirm('Полечить токены?\nСлужба смарт-карт перезапустится, обмен на ~минуту прервётся.\nВ приложении в трее потребуется подтвердить права (UAC).')) return;
+      setState({ healing: true });
+      showToast('Запускаю лечение через трей — подтвердите UAC…');
+      runJob('heal', function (res, err) {
+        setState({ healing: false });
+        showToast(err ? err : 'Лечение запущено — статус обновится автоматически');
+      });
+    },
 
     /* мастер установки */
     wizardAssign: function (el) {
