@@ -31,5 +31,8 @@ for proj in Tray Service Cli; do
   "$DOTNET" publish "src/UtmOrchestrator.$proj/UtmOrchestrator.$proj.csproj" "${COMMON[@]}"
 done
 
+# Скрипты установки/удаления — рядом с exe в dist (для развёртывания на компе)
+cp install.ps1 uninstall.ps1 "$OUT/" 2>/dev/null || true
+
 echo "=== готово, dist/ ==="
-ls -lah "$OUT" | grep -iE '\.exe' || true
+ls -lah "$OUT" | grep -iE '\.exe|\.ps1' || true

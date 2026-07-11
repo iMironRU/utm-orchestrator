@@ -762,10 +762,20 @@
           }).join('');
       }
     }
+    // Подхват существующих УТМ (первый запуск): если нашли службы + отсканировали токены.
+    var discovered = (state.liveStatus && state.liveStatus.instances) ? state.liveStatus.instances.length : 0;
+    var adoptSection = '';
+    if (state.scannedTokens && state.scannedTokens.length && discovered) {
+      adoptSection = '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding-top:10px;margin-top:2px;border-top:1px solid ' + c.border + ';">' +
+        '<div style="flex:1;min-width:180px;font:12.5px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">На компьютере найдено УТМ: <b style="color:' + c.textPrimary + ';">' + discovered + '</b>. Подхватить их под управление оркестратора (запишет привязки серийник↔ридер).</div>' +
+        '<button data-action="adoptExisting" style="background:' + c.ok + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Подхватить существующие УТМ</button>' +
+      '</div>';
+    }
+
     var scanCard = '<div style="display:flex;flex-direction:column;gap:12px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
-      '<div style="font:700 14px system-ui,sans-serif;color:' + c.textPrimary + ';">Токены на компьютере</div>' +
+      '<div style="font:700 14px system-ui,sans-serif;color:' + c.textPrimary + ';">Обследование: токены на компьютере</div>' +
       '<div style="font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Читаются через приложение в трее (интерактивно). Работает, когда панель открыта с самого компьютера и трей запущен.</div>' +
-      '<div>' + scanBtn + '</div>' + scanResult +
+      '<div>' + scanBtn + '</div>' + scanResult + adoptSection +
     '</div>';
 
     return '<div style="display:flex;flex-direction:column;gap:16px;">' +
@@ -1252,6 +1262,19 @@
         if (err) { setState({ scanning: false }); showToast(err); return; }
         setState({ scanning: false, scannedTokens: (res && res.tokens) || [] });
       });
+    },
+
+    /* Подхватить существующие УТМ под управление (первый запуск): строит state.json
+       из обнаруженных служб + отсканированных токенов. */
+    adoptExisting: function () {
+      var toks = state.scannedTokens || [];
+      showToast('Подхватываю существующие УТМ…');
+      fetch('/api/setup/adopt', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tokens: toks }),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { showToast('Подхвачено УТМ: ' + (d.matched || 0) + ' из ' + (d.total || 0)); pollStatus(true); })
+        .catch(function () { showToast('Не удалось подхватить'); });
     },
 
     /* Полечить токены через трей (рестарт SCardSvr + подъём; требует UAC). */

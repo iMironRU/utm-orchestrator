@@ -213,12 +213,46 @@ app.MapGet("/api/jobs/{id}", (string id, UtmOrchestrator.Service.Jobs.JobStore j
         : Results.Json(new { id = job.Id, type = job.Type, state = job.State.ToString(), result = job.Result, error = job.Error });
 });
 
+// --- Первый запуск / обследование: подхватить существующие УТМ ---
+// state.json пуст = первый запуск. adopt строит state.json из discovery (службы
+// Transport* + порт/папка/ФСРАР) + отсканированных треем токенов (серийник/ридер).
+app.MapGet("/api/setup/status", () =>
+{
+    var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    int withSerial = state.Instances.Count(i => !string.IsNullOrEmpty(i.TokenSerial));
+    return Results.Json(new { adopted = state.Instances.Count, managed = withSerial, firstRun = state.Instances.Count == 0 });
+});
+
+app.MapPost("/api/setup/adopt", async (AdoptRequest req, SerialCache serials, CancellationToken ct) =>
+{
+    var byFsrar = new Dictionary<string, AdoptToken>(StringComparer.OrdinalIgnoreCase);
+    foreach (var t in req.Tokens ?? new())
+        if (!string.IsNullOrEmpty(t.Fsrar)) byFsrar[t.Fsrar!] = t;
+
+    var instances = (await UtmDiscovery.DiscoverAsync(ct, scanTokens: false, serials)).ToList();
+    int matched = 0;
+    foreach (var inst in instances)
+    {
+        if (!string.IsNullOrEmpty(inst.ExpectedFsrar) && byFsrar.TryGetValue(inst.ExpectedFsrar!, out var tok))
+        {
+            inst.TokenSerial = tok.Serial;
+            inst.ReaderName = tok.Reader;
+            if (!string.IsNullOrEmpty(tok.Serial)) serials.Learn(inst.ExpectedFsrar!, tok.Serial!);
+            matched++;
+        }
+    }
+    new OrchestratorState { Instances = instances }.Save(OrchestratorState.DefaultPath);
+    return Results.Ok(new { total = instances.Count, matched });
+});
+
 app.Run();
 
 record SetNameRequest(string Serial, string? Name);
 record RestartRequest(string Service);
 record JobCreateRequest(string Type, string? Params);
 record JobResultRequest(string? Result, string? Error);
+record AdoptToken(string? Serial, string? Fsrar, string? Reader);
+record AdoptRequest(List<AdoptToken>? Tokens);
 
 // Сериализация операций с ридерами (перезапуск/подъём) + общий файловый лог.
 static class ReaderOp
