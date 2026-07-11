@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
   Удаление УТМ:Оркестратор. От администратора:
     powershell -ExecutionPolicy Bypass -File uninstall.ps1

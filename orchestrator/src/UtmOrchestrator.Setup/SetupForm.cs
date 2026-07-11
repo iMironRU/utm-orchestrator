@@ -157,7 +157,16 @@ public sealed class SetupForm : Form
         string installPs1 = Directory.EnumerateFiles(staging, "install.ps1", SearchOption.AllDirectories).FirstOrDefault()
             ?? throw new FileNotFoundException("install.ps1 не найден в архиве");
 
-        // 4. Запустить install.ps1 (мы уже с правами администратора — powershell наследует).
+        // 4. Пере-сохранить install.ps1 с BOM: PowerShell 5.1 без BOM читает .ps1 как
+        //    ANSI, и кириллица в строках ломает парсинг. Мы знаем, что файл в UTF-8.
+        try
+        {
+            string ps1 = File.ReadAllText(installPs1); // авто-детект BOM, иначе UTF-8
+            File.WriteAllText(installPs1, ps1, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+        }
+        catch (Exception e) { Log("предупреждение: не удалось нормализовать install.ps1: " + e.Message); }
+
+        // Запустить install.ps1 (мы уже с правами администратора — powershell наследует).
         SetStatus("Устанавливаю службу и панель…");
         int code = await RunPowerShellAsync(installPs1);
         _bar.Style = ProgressBarStyle.Continuous;

@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 <#
   Установка УТМ:Оркестратор на компьютер.
   Запускать ОТ АДМИНИСТРАТОРА из папки, где лежат exe + wwwroot (содержимое dist/):
