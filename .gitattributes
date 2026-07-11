@@ -1,0 +1,6 @@
+# Скрипты оболочки всегда с LF — иначе на Windows-раннере CI git даёт CRLF и
+# ломает shebang (./publish.sh падает с "bad interpreter: /usr/bin/env bash^M").
+*.sh text eol=lf
+
+# Нормализация переводов строк для остального (git сам решает по содержимому).
+* text=auto
