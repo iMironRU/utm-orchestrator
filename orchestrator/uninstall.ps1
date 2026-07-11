@@ -20,7 +20,8 @@ if (Get-Service UtmOrchestrator -ErrorAction SilentlyContinue) {
 # трей
 Get-Process UtmOrchestrator.Tray -ErrorAction SilentlyContinue | Stop-Process -Force
 Remove-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name UtmOrchestratorTray -ErrorAction SilentlyContinue
-Write-Host "  трей убран из автозагрузки"
+Unregister-ScheduledTask -TaskName 'UtmOrchestrator-Tray' -Confirm:$false -ErrorAction SilentlyContinue
+Write-Host "  трей убран из автозагрузки (Run-ключ + задача)"
 
 if ($Purge) {
   Remove-Item $Dst -Recurse -Force

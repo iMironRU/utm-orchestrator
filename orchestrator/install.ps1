@@ -35,10 +35,24 @@ if (-not (Get-Service UtmOrchestrator -ErrorAction SilentlyContinue)) {
 Set-Service SCardSvr -StartupType Automatic
 Start-Service SCardSvr -ErrorAction SilentlyContinue
 
-# 5) трей в автозагрузку текущего пользователя
+# 5) трей в автозагрузку текущего пользователя — ДВА механизма для надёжности
+#    (Run-ключ иногда «не срабатывает» после перезагрузки; трей single-instance,
+#     поэтому оба одновременно безопасны — задвоения не будет).
+$trayExe = "$Dst\UtmOrchestrator.Tray.exe"
+# 5a) Run-ключ (быстрый путь)
 New-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' `
-  -Name UtmOrchestratorTray -Value "`"$Dst\UtmOrchestrator.Tray.exe`"" -PropertyType String -Force | Out-Null
-Write-Host "  трей добавлен в автозагрузку"
+  -Name UtmOrchestratorTray -Value "`"$trayExe`"" -PropertyType String -Force | Out-Null
+# 5b) задача планировщика «при входе» + задержка 15с (надёжный путь)
+$who = "$env:USERDOMAIN\$env:USERNAME"
+$act = New-ScheduledTaskAction -Execute $trayExe
+$trg = New-ScheduledTaskTrigger -AtLogOn -User $who
+$trg.Delay = 'PT15S'
+$prn = New-ScheduledTaskPrincipal -UserId $who -LogonType Interactive -RunLevel Limited
+$set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 2 -RestartInterval (New-TimeSpan -Minutes 1)
+Register-ScheduledTask -TaskName 'UtmOrchestrator-Tray' -Action $act -Trigger $trg `
+  -Principal $prn -Settings $set -Force | Out-Null
+Write-Host "  трей в автозагрузке (Run-ключ + задача «при входе»)"
 
 # 6) запустить
 Start-Service UtmOrchestrator
