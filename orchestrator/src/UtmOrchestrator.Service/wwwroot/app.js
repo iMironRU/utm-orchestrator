@@ -43,6 +43,7 @@
     scannedTokens: null,           // результат скана токенов трея (null = не сканировали)
     scanning: false,               // идёт скан
     healing: false,                // идёт лечение
+    exports: null,                 // готовые бандлы переноса (null = не грузили)
     overviewFilter: null,          // null | 'problem'
 
     /* --- аутентификация «по галочке» (доп. требование продукта) --- */
@@ -622,6 +623,23 @@
       '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">Смена порта перезапустит УТМ (~1 мин, обмен прервётся), поправит его конфиг и перенесёт правило брандмауэра.</div>' +
     '</div>';
 
+    // --- Перенос на другой компьютер ---
+    var myFsrar = sel.fsrarDisplay && sel.fsrarDisplay !== '—' ? sel.fsrarDisplay : '';
+    var bundles = (state.exports || []).filter(function (b) { return myFsrar && b.name.indexOf(myFsrar) !== -1; });
+    var bundleList = bundles.length
+      ? bundles.map(function (b) {
+          return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;background:' + c.subtleBg + ';border-radius:8px;flex-wrap:wrap;">' +
+            '<span style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textSecondary + ';">' + esc(b.name) + ' · ' + b.sizeMb + ' МБ</span>' +
+            '<a href="/api/exports/download?name=' + encodeURIComponent(b.name) + '" style="font:600 12px system-ui,sans-serif;color:' + c.brand + ';text-decoration:none;">Скачать ↓</a></div>';
+        }).join('')
+      : '';
+    var transferCard = '<div style="display:flex;flex-direction:column;gap:12px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
+      '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Перенос на другой компьютер</div>' +
+      '<div style="font:12px/1.55 system-ui,sans-serif;color:' + c.textSecondary + ';">Экспортирует УТМ целиком (софт + база + служба) в файл. Затем перенесите файл <b>и токен</b> на новый компьютер и импортируйте там. Экспорт ненадолго остановит этот УТМ и вернёт его назад — источник не меняется.</div>' +
+      '<div><button data-action="exportUtm" data-service="' + esc(sel.service) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Экспортировать для переноса</button></div>' +
+      bundleList +
+    '</div>';
+
     var danger = '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:' + c.errorSoftBg + ';border:1px solid ' + c.error + ';border-radius:12px;flex-wrap:wrap;gap:10px;">' +
       '<div><div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Удалить УТМ</div>' +
       '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:2px;">Необратимо: настройки и привязка токена будут удалены</div></div>' +
@@ -629,7 +647,7 @@
 
     return '<div style="display:flex;flex-direction:column;gap:16px;">' +
       '<div data-action="goUtm" style="font:600 12.5px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">← Все УТМ</div>' +
-      statusPillWide(sel, c) + callout + nameCard + info + portCard + actions + danger +
+      statusPillWide(sel, c) + callout + nameCard + info + portCard + actions + transferCard + danger +
     '</div>';
   }
 
@@ -810,6 +828,14 @@
       .then(function (r) { return r.json(); })
       .then(function (d) { state.logs = d.lines || []; if (state.screen === 'logs') render(); })
       .catch(function () { state.logs = []; if (state.screen === 'logs') render(); });
+  }
+
+  // Готовые бандлы переноса (для карточки УТМ: экспорт + скачивание).
+  function loadExports() {
+    fetch('/api/exports', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { state.exports = d.exports || []; if (state.screen === 'utm-detail') render(); })
+      .catch(function () { state.exports = []; });
   }
 
   /* Связка веб↔трей: создать интерактивное задание и дождаться результата.
@@ -1055,7 +1081,23 @@
     goSettings: function () { setScreen('settings'); if (!state.settingsLoaded) loadSettings(); },
     goInstall: function () { setState({ screen: 'install', mobileNavOpen: false, notifOpen: false }); },
 
-    openUtm: function (el) { setState({ screen: 'utm-detail', selectedUtmId: el.getAttribute('data-id'), mobileNavOpen: false, notifOpen: false }); },
+    openUtm: function (el) { setState({ screen: 'utm-detail', selectedUtmId: el.getAttribute('data-id'), mobileNavOpen: false, notifOpen: false }); loadExports(); },
+    /* Экспорт УТМ для переноса (стоп → бандл → introduce-возврат; источник цел). */
+    exportUtm: function (el) {
+      var service = el.getAttribute('data-service');
+      if (!window.confirm('Экспортировать «' + selectedUtm().name + '» для переноса?\nУТМ ненадолго остановится (~1-2 мин) и вернётся. Источник не меняется.')) return;
+      showToast('Экспорт: пакую УТМ в бандл (~1-2 мин)…');
+      fetch('/api/utm/export', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: service }),
+      })
+        .then(function (r) {
+          if (r.status === 409) { showToast('Уже идёт операция с ридерами — подождите'); return; }
+          if (!r.ok) throw new Error();
+          showToast('Экспорт запущен — бандл появится в карточке через ~1-2 мин');
+          var t = setInterval(loadExports, 6000); setTimeout(function () { clearInterval(t); }, 180000);
+        })
+        .catch(function () { showToast('Не удалось запустить экспорт'); });
+    },
     openLogsFor: function (el) { setState({ screen: 'logs', logsSearch: String(el.getAttribute('data-port') || ''), mobileNavOpen: false, notifOpen: false }); loadLogs(); },
     openUtmWeb: function (el) {
       var port = el.getAttribute('data-port');

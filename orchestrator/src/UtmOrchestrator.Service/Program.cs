@@ -248,6 +248,60 @@ app.MapPost("/api/utm/port", (ChangePortRequest req) =>
     return Results.Accepted(value: new { ok = true, service = req.Service, newPort = req.NewPort });
 });
 
+// --- Перенос: ЭКСПОРТ УТМ в бандл (сторона-источник) ---
+// Стоп службы → zip всей папки УТМ + манифест + procrun-реестр → introduce-возврат.
+// Источник не разрушается. Бандл кладётся в <baseDir>\exports.
+app.MapPost("/api/utm/export", (RestartRequest req) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    if (string.IsNullOrWhiteSpace(req.Service)) return Results.BadRequest(new { error = "service обязателен" });
+    var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var inst = state.Instances.FirstOrDefault(i =>
+        string.Equals(i.ServiceName, req.Service, StringComparison.OrdinalIgnoreCase));
+    if (inst is null) return Results.NotFound(new { error = $"УТМ {req.Service} не найден" });
+
+    if (!ReaderOp.Gate.Wait(0))
+        return Results.Conflict(new { error = "уже идёт операция с ридерами — попробуйте позже" });
+
+    var allReaders = state.Instances.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
+    string exportsDir = Path.Combine(AppContext.BaseDirectory, "exports");
+
+    _ = Task.Run(() =>
+    {
+        using var _ = BringUpStatus.Begin();
+        try
+        {
+            var r = UtmOrchestrator.Core.Transfer.UtmTransfer.Export(inst, allReaders, null, exportsDir, ReaderOp.FileLog);
+            ReaderOp.FileLog($"export {req.Service}: success={r.Success} — {r.Message} {r.BundlePath}");
+        }
+        catch (Exception e) { ReaderOp.FileLog($"export {req.Service}: СБОЙ — {e}"); }
+        finally { ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true, service = req.Service });
+});
+
+// --- Список готовых бандлов переноса ---
+app.MapGet("/api/exports", () =>
+{
+    string dir = Path.Combine(AppContext.BaseDirectory, "exports");
+    var list = new List<object>();
+    if (Directory.Exists(dir))
+        foreach (var fi in new DirectoryInfo(dir).EnumerateFiles("UTM-export-*.zip")
+                     .OrderByDescending(f => f.CreationTimeUtc))
+            list.Add(new { name = fi.Name, sizeMb = fi.Length / 1_048_576, created = fi.CreationTimeUtc.ToString("o") });
+    return Results.Json(new { exports = list });
+});
+
+// --- Скачать бандл переноса ---
+app.MapGet("/api/exports/download", (string name) =>
+{
+    if (string.IsNullOrWhiteSpace(name) || name.Contains("..") || name.Contains('/') || name.Contains('\\'))
+        return Results.BadRequest(new { error = "некорректное имя" });
+    string path = Path.Combine(AppContext.BaseDirectory, "exports", name);
+    if (!File.Exists(path)) return Results.NotFound(new { error = "бандл не найден" });
+    return Results.File(path, "application/zip", name);
+});
+
 // --- Полечить токены: рестарт SCardSvr (будит замёрзшие) + introduce-подъём всех ---
 // Служба (LocalSystem) делает это сама — UAC/трей не нужны. Это НЕ PKCS11-скан, а
 // рестарт службы + introduce (session-0-safe, как boot-подъём). Фон, под общим замком.
