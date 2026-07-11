@@ -38,6 +38,9 @@ switch (command)
     case "heal":
         Heal();
         break;
+    case "scan-json":
+        ScanJson();
+        break;
     case "slotcount":
         SlotCount();
         break;
@@ -251,6 +254,23 @@ static void ListReaders()
         try { device = table.GetDeviceSystemName(r); }
         catch (Exception e) { device = $"<ошибка: {e.Message}>"; }
         Console.WriteLine($"  '{r}'  -> устройство '{device}'");
+    }
+}
+
+// Скан токенов в JSON (для трея/веб-мастера). Отдельный процесс: если PKCS11 упадёт
+// (AccessViolation на занятом токене), падает только он, а трей выживает. В штатном
+// режиме занятые токены не перечисляются, свободный/новый токен виден — безопасно.
+static void ScanJson()
+{
+    try
+    {
+        var tokens = new TokenScanner().Scan();
+        var arr = tokens.Select(t => new { serial = t.Serial, fsrar = t.FsrarId, reader = t.ReaderName }).ToArray();
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { tokens = arr }));
+    }
+    catch (Exception e)
+    {
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { error = e.Message }));
     }
 }
 

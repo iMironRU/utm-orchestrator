@@ -12,6 +12,7 @@ public sealed class TrayAppContext : ApplicationContext
 {
     private readonly NotifyIcon _notify;
     private readonly System.Windows.Forms.Timer _timer;
+    private readonly JobPoller _jobPoller;
     private readonly Icon _ok, _error, _busyIcon, _disconnected;
     private MainForm? _form;
     private bool _busy;
@@ -41,6 +42,9 @@ public sealed class TrayAppContext : ApplicationContext
         _timer = new System.Windows.Forms.Timer { Interval = 8000 };
         _timer.Tick += async (_, _) => await RefreshAsync();
         _timer.Start();
+
+        // «Руки» веба: опрос интерактивных заданий (скан токенов, лечение).
+        _jobPoller = new JobPoller();
 
         _ = RefreshAsync();
     }
@@ -95,6 +99,7 @@ public sealed class TrayAppContext : ApplicationContext
     private void ExitApp()
     {
         _timer.Stop();
+        _jobPoller.Dispose();
         _notify.Visible = false;
         _notify.Dispose();
         _form?.Dispose();

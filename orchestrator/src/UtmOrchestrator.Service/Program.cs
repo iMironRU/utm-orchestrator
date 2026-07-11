@@ -16,6 +16,7 @@ builder.Services.AddSingleton<NameStore>();
 builder.Services.AddSingleton<SerialCache>();
 builder.Services.AddSingleton<OrgInfoCache>();
 builder.Services.AddSingleton<PanelSettings>();
+builder.Services.AddSingleton<UtmOrchestrator.Service.Jobs.JobStore>();
 
 // Порт панели (по умолчанию 8090, не пересекается с УТМ 8080-8085 и их внутренними).
 string url = builder.Configuration.GetValue("PanelUrl", "http://localhost:8090")!;
@@ -180,10 +181,44 @@ app.MapPost("/api/utm/restart", (RestartRequest req) =>
     return Results.Accepted(value: new { ok = true, started = req.Service });
 });
 
+// --- Очередь интерактивных заданий (веб ↔ трей) ---
+// Веб кладёт задание (scan/heal), трей (в интерактивной сессии) забирает pending,
+// выполняет и возвращает результат, веб опрашивает по id. Только localhost.
+app.MapPost("/api/jobs", (JobCreateRequest req, UtmOrchestrator.Service.Jobs.JobStore jobs) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Type)) return Results.BadRequest(new { error = "type обязателен" });
+    var job = jobs.Create(req.Type.Trim().ToLowerInvariant(), req.Params);
+    return Results.Ok(new { id = job.Id });
+});
+
+app.MapGet("/api/jobs/pending", (UtmOrchestrator.Service.Jobs.JobStore jobs) =>
+{
+    var job = jobs.TakePending();
+    return job is null
+        ? Results.NoContent()
+        : Results.Json(new { id = job.Id, type = job.Type, prms = job.Params });
+});
+
+app.MapPost("/api/jobs/{id}/result", (string id, JobResultRequest req, UtmOrchestrator.Service.Jobs.JobStore jobs) =>
+{
+    jobs.Complete(id, req.Result, req.Error);
+    return Results.Ok(new { ok = true });
+});
+
+app.MapGet("/api/jobs/{id}", (string id, UtmOrchestrator.Service.Jobs.JobStore jobs) =>
+{
+    var job = jobs.Get(id);
+    return job is null
+        ? Results.NotFound(new { error = "нет такого задания" })
+        : Results.Json(new { id = job.Id, type = job.Type, state = job.State.ToString(), result = job.Result, error = job.Error });
+});
+
 app.Run();
 
 record SetNameRequest(string Serial, string? Name);
 record RestartRequest(string Service);
+record JobCreateRequest(string Type, string? Params);
+record JobResultRequest(string? Result, string? Error);
 
 // Сериализация операций с ридерами (перезапуск/подъём) + общий файловый лог.
 static class ReaderOp
