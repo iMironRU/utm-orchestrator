@@ -30,6 +30,7 @@
     notifOpen: false,
     mobileNavOpen: false,
     confirmDeleteOpen: false,
+    confirm: null,                 // {title, message, okLabel, danger} — своя модалка подтверждения
     toast: null,
     unreadCount: 0,
     firewallAuto: true,            // предпочтение «открывать порты в файрволе»
@@ -1217,6 +1218,25 @@
       '</div></div>';
   }
 
+  // Универсальная модалка подтверждения (замена window.confirm). Многострочный
+  // message разбиваем по \n на абзацы.
+  function confirmModalHTML(c) {
+    var m = state.confirm;
+    var okBg = m.danger ? c.error : c.brand;
+    var body = String(m.message || '').split('\n').map(function (line) {
+      return '<div style="font:13px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">' + esc(line) + '</div>';
+    }).join('');
+    return '<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:70;padding:20px;">' +
+      '<div data-pop="1" style="width:100%;max-width:400px;background:' + c.cardBg + ';border-radius:14px;padding:22px;display:flex;flex-direction:column;gap:12px;">' +
+        '<div style="font:700 15px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(m.title) + '</div>' +
+        body +
+        '<div style="display:flex;justify-content:flex-end;gap:10px;margin-top:6px;">' +
+          '<button data-action="confirmCancel" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:9px 16px;border-radius:8px;font:600 13px system-ui,sans-serif;cursor:pointer;">Отмена</button>' +
+          '<button data-action="confirmOk" style="background:' + okBg + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 13px system-ui,sans-serif;cursor:pointer;">' + esc(m.okLabel) + '</button>' +
+        '</div>' +
+      '</div></div>';
+  }
+
   function toastHTML(c) {
     return '<div style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:' + c.toastBg + ';color:#fff;padding:11px 20px;border-radius:9px;font:600 13px system-ui,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.3);z-index:60;white-space:nowrap;">' + esc(state.toast) + '</div>';
   }
@@ -1269,6 +1289,7 @@
     return '<div style="position:relative;min-height:100vh;background:' + c.appBg + ';">' +
       (showLogin ? loginScreen(c) : appBody(c)) +
       (state.confirmDeleteOpen ? modalHTML(c) : '') +
+      (state.confirm ? confirmModalHTML(c) : '') +
       (state.toast ? toastHTML(c) : '') +
       (state.updating ? updateOverlay(c) : '') +
     '</div>';
@@ -1293,6 +1314,20 @@
   // Честная заглушка: функция ещё не реализована — не притворяемся успехом.
   function notReady(what) { showToast((what || 'Функция') + ' — в разработке'); }
 
+  /* ====================== ПОДТВЕРЖДЕНИЕ (своя модалка вместо window.confirm) ====================== */
+  // Колбэк «да» держим вне state (функции не рендерятся): модалка выставляет
+  // state.confirm с текстом, а confirmOk/confirmCancel дёргают/сбрасывают колбэк.
+  var _confirmCb = null;
+  function askConfirm(opts, onOk) {
+    _confirmCb = onOk || null;
+    setState({ confirm: {
+      title: opts.title || 'Подтверждение',
+      message: opts.message || '',
+      okLabel: opts.okLabel || 'Продолжить',
+      danger: opts.danger === true,
+    } });
+  }
+
   /* ====================== ДЕЙСТВИЯ ====================== */
   function setScreen(s) { setState({ screen: s, mobileNavOpen: false, notifOpen: false }); }
 
@@ -1312,18 +1347,20 @@
     /* Экспорт УТМ для переноса (стоп → бандл → introduce-возврат; источник цел). */
     exportUtm: function (el) {
       var service = el.getAttribute('data-service');
-      if (!window.confirm('Экспортировать «' + selectedUtm().name + '» для переноса?\nУТМ ненадолго остановится (~1-2 мин) и вернётся. Источник не меняется.')) return;
-      showToast('Экспорт: пакую УТМ в бандл (~1-2 мин)…');
-      fetch('/api/utm/export', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: service }),
-      })
-        .then(function (r) {
-          if (r.status === 409) { showToast('Уже идёт операция с ридерами — подождите'); return; }
-          if (!r.ok) throw new Error();
-          showToast('Экспорт запущен — бандл появится в карточке через ~1-2 мин');
-          var t = setInterval(loadExports, 6000); setTimeout(function () { clearInterval(t); }, 180000);
+      askConfirm({ title: 'Экспорт для переноса', okLabel: 'Экспортировать',
+        message: 'Экспортировать «' + selectedUtm().name + '» для переноса?\nУТМ ненадолго остановится (~1-2 мин) и вернётся. Источник не меняется.' }, function () {
+        showToast('Экспорт: пакую УТМ в бандл (~1-2 мин)…');
+        fetch('/api/utm/export', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: service }),
         })
-        .catch(function () { showToast('Не удалось запустить экспорт'); });
+          .then(function (r) {
+            if (r.status === 409) { showToast('Уже идёт операция с ридерами — подождите'); return; }
+            if (!r.ok) throw new Error();
+            showToast('Экспорт запущен — бандл появится в карточке через ~1-2 мин');
+            var t = setInterval(loadExports, 6000); setTimeout(function () { clearInterval(t); }, 180000);
+          })
+          .catch(function () { showToast('Не удалось запустить экспорт'); });
+      });
     },
     openLogsFor: function (el) { setState({ screen: 'logs', logsSearch: String(el.getAttribute('data-port') || ''), mobileNavOpen: false, notifOpen: false }); loadLogs(); },
     openUtmWeb: function (el) {
@@ -1375,16 +1412,18 @@
       var name = el.getAttribute('data-name');
       // «Перезапустить» — реальный вызов службы (introduce, session-0-safe).
       if (label === 'Перезапустить' && service) {
-        if (!window.confirm('Перезапустить «' + name + '»?\nОбмен с ЕГАИС на ~минуту прервётся.')) return;
-        showToast('Перезапуск «' + name + '»…');
-        fetch('/api/utm/restart', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ service: service }),
-        }).then(function (r) {
-          if (r.status === 409) { showToast('Уже идёт операция с ридерами — подождите'); return; }
-          if (!r.ok) throw new Error();
-          showToast('Перезапуск запущен — статус обновится автоматически');
-        }).catch(function () { showToast('Не удалось запустить перезапуск'); });
+        askConfirm({ title: 'Перезапуск УТМ', okLabel: 'Перезапустить',
+          message: 'Перезапустить «' + name + '»?\nОбмен с ЕГАИС на ~минуту прервётся.' }, function () {
+          showToast('Перезапуск «' + name + '»…');
+          fetch('/api/utm/restart', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ service: service }),
+          }).then(function (r) {
+            if (r.status === 409) { showToast('Уже идёт операция с ридерами — подождите'); return; }
+            if (!r.ok) throw new Error();
+            showToast('Перезапуск запущен — статус обновится автоматически');
+          }).catch(function () { showToast('Не удалось запустить перезапуск'); });
+        });
         return;
       }
       // Прочие первичные действия (запуск/привязка) пока не реализованы — честно.
@@ -1443,19 +1482,21 @@
       var newPort = parseInt(input.value, 10);
       if (!(newPort >= 1 && newPort <= 65535)) { showToast('Порт должен быть в диапазоне 1–65535'); return; }
       if (newPort === sel.port) { showToast('Порт не изменился'); return; }
-      if (!window.confirm('Сменить порт «' + sel.name + '» с ' + sel.port + ' на ' + newPort + '?\nУТМ перезапустится (~1 мин), обмен с ЕГАИС прервётся.')) return;
-      showToast('Меняю порт на ' + newPort + '…');
-      fetch('/api/utm/port', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ service: sel.service, newPort: newPort }),
-      })
-        .then(function (r) {
-          if (r.status === 409) { showToast('Порт занят или идёт другая операция — подождите'); return; }
-          if (r.status === 400) { return r.json().then(function (d) { showToast(d.error || 'Некорректный порт'); }); }
-          if (!r.ok) throw new Error();
-          showToast('Смена порта запущена — статус обновится автоматически');
+      askConfirm({ title: 'Смена локального порта', okLabel: 'Изменить порт',
+        message: 'Сменить порт «' + sel.name + '» с ' + sel.port + ' на ' + newPort + '?\nУТМ перезапустится (~1 мин), обмен с ЕГАИС прервётся.' }, function () {
+        showToast('Меняю порт на ' + newPort + '…');
+        fetch('/api/utm/port', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ service: sel.service, newPort: newPort }),
         })
-        .catch(function () { showToast('Не удалось сменить порт'); });
+          .then(function (r) {
+            if (r.status === 409) { showToast('Порт занят или идёт другая операция — подождите'); return; }
+            if (r.status === 400) { return r.json().then(function (d) { showToast(d.error || 'Некорректный порт'); }); }
+            if (!r.ok) throw new Error();
+            showToast('Смена порта запущена — статус обновится автоматически');
+          })
+          .catch(function () { showToast('Не удалось сменить порт'); });
+      });
     },
     /* краткое название УТМ (ключ — серийник токена) */
     saveName: function () {
@@ -1469,6 +1510,8 @@
       var serial = el.getAttribute('data-serial');
       if (serial) postName(serial, '');
     },
+    confirmOk: function () { var cb = _confirmCb; _confirmCb = null; setState({ confirm: null }); if (cb) cb(); },
+    confirmCancel: function () { _confirmCb = null; setState({ confirm: null }); },
     openDeleteConfirm: function () { setState({ confirmDeleteOpen: true }); },
     closeDeleteConfirm: function () { setState({ confirmDeleteOpen: false }); },
     confirmDelete: function () { setState({ confirmDeleteOpen: false }); notReady('Удаление УТМ'); },
@@ -1493,18 +1536,20 @@
       var fsrar = el.getAttribute('data-fsrar') || '';
       var reader = el.getAttribute('data-reader') || '';
       if (!reader) { showToast('У токена нет ридера — повторите скан'); return; }
-      if (!window.confirm('Установить новый УТМ на токен ' + serial + '?\nОркестратор развернёт чистый УТМ, зарегистрирует службу на свободном порту и привяжет токен (~1-2 мин).')) return;
-      showToast('Устанавливаю УТМ на токен ' + serial + '…');
-      fetch('/api/utm/add', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ serial: serial, fsrar: fsrar, reader: reader }),
-      })
-        .then(function (r) {
-          if (r.status === 409) { return r.json().then(function (d) { showToast(d.error || 'Уже идёт операция'); }); }
-          if (!r.ok) throw new Error();
-          showToast('Установка запущена — новый УТМ появится в панели через ~1-2 мин');
+      askConfirm({ title: 'Новый УТМ', okLabel: 'Установить',
+        message: 'Установить новый УТМ на токен ' + serial + '?\nОркестратор развернёт чистый УТМ, зарегистрирует службу на свободном порту и привяжет токен (~1-2 мин).' }, function () {
+        showToast('Устанавливаю УТМ на токен ' + serial + '…');
+        fetch('/api/utm/add', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ serial: serial, fsrar: fsrar, reader: reader }),
         })
-        .catch(function () { showToast('Не удалось запустить установку'); });
+          .then(function (r) {
+            if (r.status === 409) { return r.json().then(function (d) { showToast(d.error || 'Уже идёт операция'); }); }
+            if (!r.ok) throw new Error();
+            showToast('Установка запущена — новый УТМ появится в панели через ~1-2 мин');
+          })
+          .catch(function () { showToast('Не удалось запустить установку'); });
+      });
     },
 
     /* Подхватить существующие УТМ под управление (первый запуск): строит state.json
@@ -1524,40 +1569,46 @@
        Без UAC: служба LocalSystem делает это сама. Блипнёт все УТМ на ~1-2 мин. */
     healTokens: function () {
       if (state.healing) return;
-      if (!window.confirm('Полечить токены?\nСлужба смарт-карт перезапустится, обмен со ВСЕМИ УТМ прервётся на ~1-2 минуты.')) return;
-      setState({ healing: true });
-      showToast('Лечение: перезапуск смарт-карт и подъём УТМ…');
-      fetch('/api/utm/heal', { method: 'POST' })
-        .then(function (r) {
-          if (r.status === 409) { showToast('Уже идёт операция с ридерами — подождите'); return; }
-          if (!r.ok) throw new Error();
-          showToast('Лечение запущено — статус обновится автоматически (~1-2 мин)');
-        })
-        .catch(function () { showToast('Не удалось запустить лечение'); })
-        .then(function () { setState({ healing: false }); });
+      askConfirm({ title: 'Лечение токенов', okLabel: 'Полечить', danger: true,
+        message: 'Полечить токены?\nСлужба смарт-карт перезапустится, обмен со ВСЕМИ УТМ прервётся на ~1-2 минуты.' }, function () {
+        setState({ healing: true });
+        showToast('Лечение: перезапуск смарт-карт и подъём УТМ…');
+        fetch('/api/utm/heal', { method: 'POST' })
+          .then(function (r) {
+            if (r.status === 409) { showToast('Уже идёт операция с ридерами — подождите'); return; }
+            if (!r.ok) throw new Error();
+            showToast('Лечение запущено — статус обновится автоматически (~1-2 мин)');
+          })
+          .catch(function () { showToast('Не удалось запустить лечение'); })
+          .then(function () { setState({ healing: false }); });
+      });
     },
 
     /* Перенять управление у 2UTM: adopt из его config + обратимо заглушить. */
     adopt2Utm: function () {
-      if (!window.confirm('Перенять управление у 2UTM?\nЕго УТМ будут подхвачены оркестратором, а 2UTM обратимо заглушён (стоп + автозапуск off). Токены и УТМ не меняются.')) return;
-      showToast('Перенимаю управление у 2UTM…');
-      fetch('/api/2utm/adopt', { method: 'POST' })
-        .then(function (r) {
-          if (r.status === 409) { showToast('Уже идёт операция — подождите'); return; }
-          if (!r.ok) throw new Error();
-          return r.json();
-        })
-        .then(function (d) { if (d) { showToast('Подхвачено УТМ: ' + (d.matched || 0) + ' из ' + (d.total || 0) + '; 2UTM заглушён'); load2Utm(); pollStatus(true); } })
-        .catch(function () { showToast('Не удалось перенять управление'); });
+      askConfirm({ title: 'Перенять управление у 2UTM', okLabel: 'Перенять',
+        message: 'Перенять управление у 2UTM?\nЕго УТМ будут подхвачены оркестратором, а 2UTM обратимо заглушён (стоп + автозапуск off). Токены и УТМ не меняются.' }, function () {
+        showToast('Перенимаю управление у 2UTM…');
+        fetch('/api/2utm/adopt', { method: 'POST' })
+          .then(function (r) {
+            if (r.status === 409) { showToast('Уже идёт операция — подождите'); return; }
+            if (!r.ok) throw new Error();
+            return r.json();
+          })
+          .then(function (d) { if (d) { showToast('Подхвачено УТМ: ' + (d.matched || 0) + ' из ' + (d.total || 0) + '; 2UTM заглушён'); load2Utm(); pollStatus(true); } })
+          .catch(function () { showToast('Не удалось перенять управление'); });
+      });
     },
     /* Откат: вернуть 2UTM (автозапуск + старт службы). */
     restore2Utm: function () {
-      if (!window.confirm('Вернуть 2UTM? Оркестратор перестанет управлять этими УТМ на загрузке — снова будет 2UTM.')) return;
-      showToast('Возвращаю 2UTM…');
-      fetch('/api/2utm/restore', { method: 'POST' })
-        .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
-        .then(function () { showToast('2UTM возвращён'); load2Utm(); })
-        .catch(function () { showToast('Не удалось вернуть 2UTM'); });
+      askConfirm({ title: 'Вернуть 2UTM', okLabel: 'Вернуть',
+        message: 'Вернуть 2UTM? Оркестратор перестанет управлять этими УТМ на загрузке — снова будет 2UTM.' }, function () {
+        showToast('Возвращаю 2UTM…');
+        fetch('/api/2utm/restore', { method: 'POST' })
+          .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+          .then(function () { showToast('2UTM возвращён'); load2Utm(); })
+          .catch(function () { showToast('Не удалось вернуть 2UTM'); });
+      });
     },
 
     /* настройка файрвола (предпочтение; применение при установке УТМ) */
@@ -1567,14 +1618,16 @@
     /* Самообновление: показываем оверлей с фазами (скачивание → перезапуск → готово). */
     updateOrchestrator: function () {
       var info = state.updateInfo || {};
-      if (!window.confirm('Обновить оркестратор до ' + (info.latest || 'новой версии') + '?\nПанель и служба перезапустятся (~1-2 минуты). УТМ продолжат работать.')) return;
-      setState({ updating: { from: info.current || '', target: info.latest || '', phase: 'download', msg: 'Скачиваю обновление…' } });
-      fetch('/api/update/apply', { method: 'POST' })
-        .then(function (r) {
-          if (!r.ok) return r.json().then(function (d) { setState({ updating: null }); showToast(d.error || 'Обновление недоступно'); });
-          pollUpdate();
-        })
-        .catch(function () { setState({ updating: null }); showToast('Не удалось запустить обновление'); });
+      askConfirm({ title: 'Обновление оркестратора', okLabel: 'Обновить',
+        message: 'Обновить оркестратор до ' + (info.latest || 'новой версии') + '?\nПанель и служба перезапустятся (~1-2 минуты). УТМ продолжат работать.' }, function () {
+        setState({ updating: { from: info.current || '', target: info.latest || '', phase: 'download', msg: 'Скачиваю обновление…' } });
+        fetch('/api/update/apply', { method: 'POST' })
+          .then(function (r) {
+            if (!r.ok) return r.json().then(function (d) { setState({ updating: null }); showToast(d.error || 'Обновление недоступно'); });
+            pollUpdate();
+          })
+          .catch(function () { setState({ updating: null }); showToast('Не удалось запустить обновление'); });
+      });
     },
     reloadPage: function () { window.location.reload(); },
     /* обновление УТМ — в беклоге (Update-UTM), пока честно */
