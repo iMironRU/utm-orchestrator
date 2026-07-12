@@ -55,6 +55,9 @@
     hasPassword: false,            // задан ли пароль (сам пароль/хэш не хранится клиентом)
     username: '',                  // логин панели
     needLogin: false,              // сервер ответил 401 → показать вход
+    loginError: '',                // ошибка входа (inline, не тост — чтобы не мигать формой)
+    loginUser: '',                 // введённый логин (сохраняем между попытками)
+    loggingIn: false,              // идёт запрос входа
     authed: false,                 // выполнен ли вход в этой сессии
 
     /* --- IP-allowlist (доп. требование продукта) --- */
@@ -378,13 +381,14 @@
         '</div>' +
         '<div style="display:flex;flex-direction:column;gap:6px;">' +
           '<label style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">Логин</label>' +
-          '<input name="username" type="text" autocomplete="username" required style="background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:10px 12px;border-radius:8px;font:13.5px system-ui,sans-serif;"/>' +
+          '<input name="username" type="text" autocomplete="username" value="' + esc(state.loginUser || '') + '" style="background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:10px 12px;border-radius:8px;font:13.5px system-ui,sans-serif;"/>' +
         '</div>' +
         '<div style="display:flex;flex-direction:column;gap:6px;">' +
           '<label style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">Пароль</label>' +
-          '<input name="password" type="password" autocomplete="current-password" required style="background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:10px 12px;border-radius:8px;font:13.5px system-ui,sans-serif;"/>' +
+          '<input name="password" type="password" autocomplete="current-password" style="background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:10px 12px;border-radius:8px;font:13.5px system-ui,sans-serif;"/>' +
         '</div>' +
-        '<button type="submit" style="margin-top:6px;background:' + c.brand + ';border:none;color:#fff;padding:11px 16px;border-radius:8px;font:600 13.5px system-ui,sans-serif;cursor:pointer;">Войти</button>' +
+        (state.loginError ? '<div style="font:12px system-ui,sans-serif;color:' + c.error + ';">' + esc(state.loginError) + '</div>' : '') +
+        '<button type="submit"' + (state.loggingIn ? ' disabled' : '') + ' style="margin-top:6px;background:' + c.brand + ';opacity:' + (state.loggingIn ? '.6' : '1') + ';border:none;color:#fff;padding:11px 16px;border-radius:8px;font:600 13.5px system-ui,sans-serif;cursor:pointer;">' + (state.loggingIn ? 'Вход…' : 'Войти') + '</button>' +
       '</form></div>';
   }
 
@@ -1284,17 +1288,20 @@
 
     /* вход — серверная проверка логина/пароля, кука сеанса */
     login: function (el) {
+      if (state.loggingIn) return;
       var u = el && el.username ? el.username.value : '';
       var p = el && el.password ? el.password.value : '';
+      if (!p) { setState({ loginError: 'Введите пароль', loginUser: u }); return; }
+      setState({ loggingIn: true, loginUser: u, loginError: '' });
       fetch('/api/auth/login', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: u, password: p }),
       })
         .then(function (r) {
-          if (r.ok) { setState({ authed: true, needLogin: false }); showToast('Добро пожаловать'); pollStatus(true); }
-          else { showToast('Неверный логин или пароль'); }
+          if (r.ok) { setState({ authed: true, needLogin: false, loggingIn: false, loginError: '', loginUser: '' }); showToast('Добро пожаловать'); pollStatus(true); }
+          else { setState({ loggingIn: false, loginError: 'Неверный логин или пароль' }); }
         })
-        .catch(function () { showToast('Не удалось войти'); });
+        .catch(function () { setState({ loggingIn: false, loginError: 'Не удалось войти — проверьте связь' }); });
     },
     logout: function () {
       fetch('/api/auth/logout', { method: 'POST' }).then(function () {}).catch(function () {});
