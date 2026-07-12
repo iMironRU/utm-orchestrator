@@ -494,6 +494,52 @@ app.MapPost("/api/2utm/restore", () =>
     return Results.Ok(new { ok = true, restored = svc?.Name });
 });
 
+// --- Самообновление оркестратора: статус ---
+app.MapGet("/api/update/status", async (CancellationToken ct) =>
+{
+    var info = await UtmOrchestrator.Core.Update.UpdateChecker.CheckAsync(ct);
+    return Results.Json(new { current = info.Current, latest = info.Latest, updateAvailable = info.UpdateAvailable });
+});
+
+// --- Самообновление: применить (скачать payload → распаковать → detached update.ps1) ---
+// update.ps1 остановит службу (наш родитель), заменит файлы и стартанёт заново; он —
+// отдельный процесс, поэтому переживёт остановку службы. Панель на ~минуту пропадёт.
+app.MapPost("/api/update/apply", async (CancellationToken ct) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    var info = await UtmOrchestrator.Core.Update.UpdateChecker.CheckAsync(ct);
+    if (!info.UpdateAvailable || info.PayloadUrl is null)
+        return Results.BadRequest(new { error = "обновление недоступно" });
+
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            string tmp = Path.Combine(Path.GetTempPath(), "utmo-update-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(tmp);
+            string zip = Path.Combine(tmp, "payload.zip");
+            ReaderOp.FileLog($"update: качаю {info.PayloadUrl}");
+            using (var h = new HttpClient { Timeout = TimeSpan.FromMinutes(10) })
+            using (var resp = await h.GetAsync(info.PayloadUrl, HttpCompletionOption.ResponseHeadersRead))
+            using (var src = await resp.Content.ReadAsStreamAsync())
+            using (var dst = File.Create(zip))
+                await src.CopyToAsync(dst);
+
+            string staging = Path.Combine(tmp, "staging");
+            System.IO.Compression.ZipFile.ExtractToDirectory(zip, staging);
+            string updatePs1 = Path.Combine(staging, "update.ps1");
+            if (!File.Exists(updatePs1)) { ReaderOp.FileLog("update: update.ps1 нет в payload"); return; }
+
+            ReaderOp.FileLog($"update: запускаю {updatePs1} (служба перезапустится)");
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                "powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -File \"{updatePs1}\"")
+            { UseShellExecute = false, CreateNoWindow = true });
+        }
+        catch (Exception e) { ReaderOp.FileLog($"update: СБОЙ — {e}"); }
+    });
+    return Results.Accepted(value: new { ok = true, updating = info.Latest });
+});
+
 app.Run();
 
 record SetNameRequest(string Serial, string? Name);

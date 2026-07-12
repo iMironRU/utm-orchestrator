@@ -45,6 +45,7 @@
     healing: false,                // идёт лечение
     exports: null,                 // готовые бандлы переноса (null = не грузили)
     twoUtm: null,                  // статус 2UTM (null = не грузили; {present:false} = нет)
+    updateInfo: null,              // {current, latest, updateAvailable} самообновления
     overviewFilter: null,          // null | 'problem'
 
     /* --- аутентификация «по галочке» (доп. требование продукта) --- */
@@ -820,9 +821,21 @@
     if (!dataLoaded()) return loadingCard(c);
     var d = state.liveStatus;
     var orchVer = (d && d.orchestratorVersion) ? d.orchestratorVersion : '—';
-    var orchestrator = '<div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 18px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;flex-wrap:wrap;">' +
+    var upd = state.updateInfo;
+    var updRight;
+    if (upd && upd.updateAvailable) {
+      updRight = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+        '<span style="font:600 12.5px system-ui,sans-serif;color:' + c.ok + ';">Доступно ' + esc(upd.latest) + '</span>' +
+        '<button data-action="updateOrchestrator" style="background:' + c.ok + ';border:none;color:#fff;padding:8px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Обновить</button></div>';
+    } else if (upd && upd.latest) {
+      updRight = '<span style="font:600 12px system-ui,sans-serif;color:' + c.textTertiary + ';">Актуальная версия</span>';
+    } else {
+      updRight = '<span style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';">проверка обновлений…</span>';
+    }
+    var orchestrator = '<div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 18px;background:' + c.cardBg + ';border:1px solid ' + (upd && upd.updateAvailable ? c.ok : c.border) + ';border-radius:12px;flex-wrap:wrap;">' +
       '<div><div style="font:700 14px system-ui,sans-serif;color:' + c.textPrimary + ';">Оркестратор</div>' +
-      '<div style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;">Установленная версия ' + esc(orchVer) + '</div></div></div>';
+      '<div style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;">Установленная версия ' + esc(orchVer) + '</div></div>' +
+      updRight + '</div>';
 
     var src = utmSource();
     var rows = src.map(function (u) { return buildUtmView(u, c); }).map(function (v) {
@@ -887,6 +900,14 @@
       .then(function (r) { return r.json(); })
       .then(function (d) { state.twoUtm = d; if (state.screen === 'install') render(); })
       .catch(function () { state.twoUtm = { present: false }; });
+  }
+
+  // Проверка обновления оркестратора (экран «Обновления»).
+  function loadUpdateInfo() {
+    fetch('/api/update/status', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { state.updateInfo = d; if (state.screen === 'updates') render(); })
+      .catch(function () { state.updateInfo = { updateAvailable: false }; });
   }
 
   /* Связка веб↔трей: создать интерактивное задание и дождаться результата.
@@ -1126,7 +1147,7 @@
     goOverview: function () { setScreen('overview'); },
     goUtm: function () { setScreen('utm'); },
     goTokens: function () { setScreen('tokens'); },
-    goUpdates: function () { setScreen('updates'); },
+    goUpdates: function () { setScreen('updates'); loadUpdateInfo(); },
     goLogs: function () { setScreen('logs'); loadLogs(); },
     refreshLogs: function () { state.logs = null; render(); loadLogs(); },
     goSettings: function () { setScreen('settings'); if (!state.settingsLoaded) loadSettings(); },
@@ -1325,8 +1346,18 @@
     setFirewallYes: function () { setState({ firewallAuto: true }); },
     setFirewallNo: function () { setState({ firewallAuto: false }); },
 
-    /* обновления — реальное обновление в беклоге, пока честно */
-    updateOrchestrator: function () { notReady('Обновление оркестратора'); },
+    /* Самообновление оркестратора: скачать новый релиз и применить (панель ненадолго ляжет). */
+    updateOrchestrator: function () {
+      if (!window.confirm('Обновить оркестратор до ' + ((state.updateInfo && state.updateInfo.latest) || 'новой версии') + '?\nПанель и служба перезапустятся (~1-2 минуты). УТМ продолжат работать.')) return;
+      showToast('Скачиваю и применяю обновление…');
+      fetch('/api/update/apply', { method: 'POST' })
+        .then(function (r) {
+          if (!r.ok) return r.json().then(function (d) { showToast(d.error || 'Обновление недоступно'); });
+          showToast('Обновление запущено — панель вернётся через ~1-2 мин, обновите страницу');
+        })
+        .catch(function () { showToast('Не удалось запустить обновление'); });
+    },
+    /* обновление УТМ — в беклоге (Update-UTM), пока честно */
     updateUtm: function () { notReady('Обновление УТМ'); },
 
     /* логи */
