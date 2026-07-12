@@ -18,14 +18,73 @@ builder.Services.AddSingleton<OrgInfoCache>();
 builder.Services.AddSingleton<PanelSettings>();
 builder.Services.AddSingleton<UtmOrchestrator.Service.Jobs.JobStore>();
 
-// Порт панели (по умолчанию 8090, не пересекается с УТМ 8080-8085 и их внутренними).
-string url = builder.Configuration.GetValue("PanelUrl", "http://localhost:8090")!;
+// Порт панели (8090). Бинд: только localhost, либо 0.0.0.0 при «доступе по сети»
+// (настройка NetworkAccess). Явный PanelUrl из конфига перекрывает.
+var earlySettings = new PanelSettings().Load();
+string url = builder.Configuration.GetValue<string?>("PanelUrl", null)
+    ?? (earlySettings.NetworkAccess ? "http://0.0.0.0:8090" : "http://127.0.0.1:8090");
 builder.WebHost.UseUrls(url);
 
 var app = builder.Build();
 
+// --- Доступ: IP-allowlist + серверная авторизация (когда включены) ---
+app.Use(async (ctx, next) =>
+{
+    var s = ctx.RequestServices.GetRequiredService<PanelSettings>().Current;
+    var ip = ctx.Connection.RemoteIpAddress;
+    bool isLocal = ip is not null && System.Net.IPAddress.IsLoopback(ip);
+
+    // IP-allowlist: если задан список и не localhost и не в списке — отказ.
+    if (!isLocal && s.AllowedIps.Count > 0 && !s.AllowedIps.Contains(ip?.ToString() ?? ""))
+    {
+        ctx.Response.StatusCode = 403;
+        await ctx.Response.WriteAsync("IP не разрешён");
+        return;
+    }
+
+    // Авторизация: RequireAuth → все /api/* (кроме входа) требуют валидный сеанс.
+    string path = ctx.Request.Path.Value ?? "";
+    if (s.RequireAuth && path.StartsWith("/api/") && path != "/api/auth/login")
+    {
+        if (!PanelAuth.Valid(ctx.Request.Cookies[PanelAuth.Cookie]))
+        {
+            ctx.Response.StatusCode = 401;
+            await ctx.Response.WriteAsync("нужен вход");
+            return;
+        }
+    }
+    await next();
+});
+
 app.UseDefaultFiles();   // отдавать index.html из wwwroot
 app.UseStaticFiles();
+
+// --- Вход/выход в панель ---
+app.MapPost("/api/auth/login", (LoginRequest req, PanelSettings settings, HttpContext ctx) =>
+{
+    var s = settings.Current;
+    if (!s.RequireAuth) return Results.Ok(new { ok = true }); // вход не требуется
+    bool userOk = string.IsNullOrEmpty(s.Username)
+        || string.Equals(s.Username, req.Username, StringComparison.OrdinalIgnoreCase);
+    if (userOk && PanelPassword.Verify(req.Password ?? "", s.PasswordHash, s.PasswordSalt))
+    {
+        ctx.Response.Cookies.Append(PanelAuth.Cookie, PanelAuth.Issue(), new CookieOptions
+        {
+            HttpOnly = true,
+            SameSite = SameSiteMode.Lax,
+            MaxAge = TimeSpan.FromDays(7),
+        });
+        return Results.Ok(new { ok = true });
+    }
+    return Results.Json(new { ok = false, error = "неверный логин или пароль" }, statusCode: 401);
+});
+
+app.MapPost("/api/auth/logout", (HttpContext ctx) =>
+{
+    PanelAuth.Revoke(ctx.Request.Cookies[PanelAuth.Cookie]);
+    ctx.Response.Cookies.Delete(PanelAuth.Cookie);
+    return Results.Ok(new { ok = true });
+});
 
 // --- API статуса (read-only) ---
 app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCache orgCache, CancellationToken ct) =>
@@ -129,12 +188,52 @@ app.MapGet("/api/logs", (int? limit) =>
     return Results.Json(new { lines });
 });
 
-// --- Настройки панели (реальные, persist) ---
-app.MapGet("/api/settings", (PanelSettings settings) => Results.Json(settings.Load()));
-app.MapPost("/api/settings", (PanelSettingsData data, PanelSettings settings) =>
+// --- Настройки панели (persist). GET — без хэша пароля. ---
+app.MapGet("/api/settings", (PanelSettings settings) =>
 {
-    settings.Save(data);
-    return Results.Ok(new { ok = true });
+    var s = settings.Current;
+    return Results.Json(new
+    {
+        requireAuth = s.RequireAuth,
+        username = s.Username,
+        networkAccess = s.NetworkAccess,
+        allowedIps = s.AllowedIps,
+        hasPassword = s.HasPassword,
+    });
+});
+app.MapPost("/api/settings", (SettingsRequest req, PanelSettings settings) =>
+{
+    var cur = settings.Current;
+    var nd = new PanelSettingsData
+    {
+        RequireAuth = req.RequireAuth,
+        Username = req.Username,
+        NetworkAccess = req.NetworkAccess,
+        AllowedIps = req.AllowedIps ?? new(),
+        PasswordHash = cur.PasswordHash,   // сохраняем существующий, если не меняют
+        PasswordSalt = cur.PasswordSalt,
+    };
+    if (!string.IsNullOrEmpty(req.NewPassword))
+    {
+        var (h, salt) = PanelPassword.Make(req.NewPassword);
+        nd.PasswordHash = h; nd.PasswordSalt = salt;
+    }
+
+    // Безопасность: вход требует пароль; доступ по сети требует включённый вход.
+    if (nd.RequireAuth && !nd.HasPassword)
+        return Results.BadRequest(new { error = "чтобы включить вход, задайте пароль" });
+    if (nd.NetworkAccess && !(nd.RequireAuth && nd.HasPassword))
+        return Results.BadRequest(new { error = "доступ по сети требует включённого входа с паролем" });
+
+    bool bindChanged = cur.NetworkAccess != nd.NetworkAccess;
+    settings.Save(nd);
+
+    // Правило файрвола на порт панели 8090 синхронизируем с доступом по сети.
+    if (OperatingSystem.IsWindows())
+        UtmOrchestrator.Core.Firewall.FirewallManager.SetPort(8090, nd.NetworkAccess, ReaderOp.FileLog);
+
+    // Смена бинда (localhost ↔ 0.0.0.0) применяется только при перезапуске службы.
+    return Results.Ok(new { ok = true, restartRequired = bindChanged });
 });
 
 // --- Задать/сбросить кастомное краткое имя УТМ (по серийнику) ---
@@ -550,6 +649,8 @@ record JobCreateRequest(string Type, string? Params);
 record JobResultRequest(string? Result, string? Error);
 record AdoptToken(string? Serial, string? Fsrar, string? Reader);
 record AdoptRequest(List<AdoptToken>? Tokens);
+record LoginRequest(string? Username, string? Password);
+record SettingsRequest(bool RequireAuth, string? Username, bool NetworkAccess, List<string>? AllowedIps, string? NewPassword);
 
 // Сериализация операций с ридерами (перезапуск/подъём) + общий файловый лог.
 static class ReaderOp

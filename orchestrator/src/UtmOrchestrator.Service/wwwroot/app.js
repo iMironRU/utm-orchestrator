@@ -50,6 +50,10 @@
 
     /* --- аутентификация «по галочке» (доп. требование продукта) --- */
     requireAuth: false,            // «Требовать вход в панель» — по умолчанию ВЫКЛ
+    networkAccess: false,          // доступ к панели по сети (иначе только localhost)
+    hasPassword: false,            // задан ли пароль (сам пароль/хэш не хранится клиентом)
+    username: '',                  // логин панели
+    needLogin: false,              // сервер ответил 401 → показать вход
     authed: false,                 // выполнен ли вход в этой сессии
 
     /* --- IP-allowlist (доп. требование продукта) --- */
@@ -938,16 +942,23 @@
       .then(function (r) { return r.json(); })
       .then(function (d) {
         state.requireAuth = !!d.requireAuth;
+        state.networkAccess = !!d.networkAccess;
+        state.hasPassword = !!d.hasPassword;
+        state.username = d.username || '';
         state.allowedIps = Array.isArray(d.allowedIps) ? d.allowedIps : [];
         state.settingsLoaded = true;
         if (state.screen === 'settings') render();
       })
       .catch(function () { state.settingsLoaded = true; });
   }
-  function saveSettings() {
+  // Сохранить настройки безопасности (пароль опционально — только если введён новый).
+  function saveSettings(newPassword) {
     var body = {
       requireAuth: !!state.requireAuth,
+      username: state.username || null,
+      networkAccess: !!state.networkAccess,
       allowedIps: (state.allowedIps || []).map(function (s) { return (s || '').trim(); }).filter(Boolean),
+      newPassword: newPassword || null,
     };
     return fetch('/api/settings', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -981,52 +992,48 @@
     }).join('');
     if (!ipRows) ipRows = '<div style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';">Список пуст — доступ разрешён с любого адреса.</div>';
 
+    var pwPlaceholder = state.hasPassword ? '•••••••• (задан, введите для смены)' : 'задайте пароль';
     var security = '<div style="display:flex;flex-direction:column;gap:12px;padding:16px 18px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
-      '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Безопасность</div>' +
+      '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Безопасность и доступ</div>' +
+      // Логин + пароль
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+        '<span style="width:150px;font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">Логин</span>' +
+        '<input id="panel-username-input" type="text" value="' + esc(state.username || '') + '" placeholder="admin" style="flex:1;min-width:140px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:8px 10px;border-radius:7px;font:13px system-ui,sans-serif;"/>' +
+      '</div>' +
       '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
         '<span style="width:150px;font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">Пароль панели</span>' +
-        '<input type="password" placeholder="••••••••" style="flex:1;min-width:140px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:8px 10px;border-radius:7px;font:13px system-ui,sans-serif;"/>' +
+        '<input id="panel-password-input" type="password" placeholder="' + esc(pwPlaceholder) + '" autocomplete="new-password" style="flex:1;min-width:140px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:8px 10px;border-radius:7px;font:13px system-ui,sans-serif;"/>' +
       '</div>' +
-      // Доп. требование 1: аутентификация «по галочке»
+      // Требовать вход
       '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding-top:6px;border-top:1px solid ' + c.border + ';">' +
         '<div><div style="font:12.5px system-ui,sans-serif;color:' + c.textPrimary + ';">Требовать вход в панель</div>' +
-        '<div style="font:11.5px system-ui,sans-serif;color:' + c.textTertiary + ';margin-top:2px;">При включении панель запросит логин и пароль</div></div>' +
+        '<div style="font:11.5px system-ui,sans-serif;color:' + c.textTertiary + ';margin-top:2px;">Панель запросит логин и пароль (нужен заданный пароль)</div></div>' +
         segmented(c, [
           { label: 'Вкл', active: state.requireAuth, action: 'setAuthReqOn' },
           { label: 'Выкл', active: !state.requireAuth, action: 'setAuthReqOff' },
         ]) +
       '</div>' +
-      // Удалённый доступ
+      // Доступ по сети
       '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">' +
-        '<span style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">Удалённый доступ (с телефона)</span>' +
+        '<div><div style="font:12.5px system-ui,sans-serif;color:' + c.textPrimary + ';">Доступ по сети (снаружи)</div>' +
+        '<div style="font:11.5px system-ui,sans-serif;color:' + c.textTertiary + ';margin-top:2px;">Иначе только с этого компьютера. Требует включённый вход. Применяется после перезапуска службы.</div></div>' +
         segmented(c, [
-          { label: 'Вкл', active: state.remoteAccess, action: 'setRemoteOn' },
-          { label: 'Выкл', active: !state.remoteAccess, action: 'setRemoteOff' },
+          { label: 'Вкл', active: state.networkAccess, action: 'setNetOn' },
+          { label: 'Выкл', active: !state.networkAccess, action: 'setNetOff' },
         ]) +
       '</div>' +
-      (state.remoteAccess ? '<div style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';padding:8px 10px;background:' + c.subtleBg + ';border-radius:7px;">Доступно по адресу: https://utm.local:8443</div>' : '') +
-      // Доп. требование 2: IP allowlist
+      (state.networkAccess ? '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.warn + ';padding:8px 10px;background:' + c.warnBg + ';border-radius:7px;">⚠ Соединение без TLS — пароль идёт по сети открыто. Для внешнего доступа используйте VPN/туннель или доверенную локальную сеть.</div>' : '') +
+      // IP allowlist
       '<div style="display:flex;flex-direction:column;gap:8px;padding-top:6px;border-top:1px solid ' + c.border + ';">' +
         '<div style="font:12.5px system-ui,sans-serif;color:' + c.textPrimary + ';">Разрешённые IP</div>' +
-        '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">Панель будет доступна только с этих IP-адресов. Оставьте список пустым, чтобы разрешить доступ отовсюду.</div>' +
+        '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">Доступ только с этих адресов (localhost всегда разрешён). Пусто = с любого адреса (но с паролем).</div>' +
         ipRows +
-        '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px;">' +
-          '<button data-action="addIp" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:7px 12px;border-radius:7px;font:600 12px system-ui,sans-serif;cursor:pointer;">Добавить IP</button>' +
-          '<button data-action="saveIps" style="background:' + c.brand + ';border:none;color:#fff;padding:7px 12px;border-radius:7px;font:600 12px system-ui,sans-serif;cursor:pointer;">Сохранить список</button>' +
-        '</div>' +
+        '<div><button data-action="addIp" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:7px 12px;border-radius:7px;font:600 12px system-ui,sans-serif;cursor:pointer;">Добавить IP</button></div>' +
       '</div>' +
+      // Сохранить всё
+      '<div style="padding-top:8px;border-top:1px solid ' + c.border + ';"><button data-action="saveSecurity" style="background:' + c.brand + ';border:none;color:#fff;padding:9px 18px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Сохранить</button></div>' +
     '</div>';
-
-    // --- PIN-коды ---
-    var pinType = state.pinVisible ? 'text' : 'password';
-    function pinRow(serial, val) {
-      return '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><span style="width:130px;font:12.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textSecondary + ';">' + serial + '</span>' +
-        '<input type="' + pinType + '" value="' + val + '" style="flex:1;min-width:120px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:8px 10px;border-radius:7px;font:13px system-ui,sans-serif;"/></div>';
-    }
-    var pins = '<div style="display:flex;flex-direction:column;gap:12px;padding:16px 18px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
-      '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">PIN-коды токенов</div>' +
-      pinRow('44f94b1a', '1234') + pinRow('a12c07e9', '5678') +
-      '<div data-action="togglePinVisible" style="font:600 12px system-ui,sans-serif;color:' + c.brand + ';cursor:pointer;width:fit-content;">' + (state.pinVisible ? 'Скрыть PIN' : 'Показать PIN') + '</div></div>';
+    var pins = '';
 
     // --- Расписание ---
     var schedule = '<div style="display:flex;flex-direction:column;gap:12px;padding:16px 18px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
@@ -1112,7 +1119,7 @@
 
   function view() {
     var c = colors();
-    var showLogin = state.requireAuth && !state.authed;
+    var showLogin = state.needLogin && !state.authed;
     return '<div style="position:relative;min-height:100vh;background:' + c.appBg + ';">' +
       (showLogin ? loginScreen(c) : appBody(c)) +
       (state.confirmDeleteOpen ? modalHTML(c) : '') +
@@ -1187,12 +1194,23 @@
     toggleMobileNav: function () { setState({ mobileNavOpen: !state.mobileNavOpen }); },
     toggleNotif: function () { setState({ notifOpen: !state.notifOpen, unreadCount: 0 }); },
 
-    /* вход */
-    login: function () {
-      // Локальный вход в панель (гейт requireAuth). Серверная проверка пароля —
-      // отдельная задача; пока панель доступна только с localhost/разрешённых IP.
-      setState({ authed: true });
-      showToast('Добро пожаловать');
+    /* вход — серверная проверка логина/пароля, кука сеанса */
+    login: function (el) {
+      var u = el && el.username ? el.username.value : '';
+      var p = el && el.password ? el.password.value : '';
+      fetch('/api/auth/login', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: u, password: p }),
+      })
+        .then(function (r) {
+          if (r.ok) { setState({ authed: true, needLogin: false }); showToast('Добро пожаловать'); pollStatus(true); }
+          else { showToast('Неверный логин или пароль'); }
+        })
+        .catch(function () { showToast('Не удалось войти'); });
+    },
+    logout: function () {
+      fetch('/api/auth/logout', { method: 'POST' }).then(function () {}).catch(function () {});
+      setState({ authed: false, needLogin: true });
     },
 
     /* обзор */
@@ -1371,17 +1389,11 @@
     },
     downloadLogs: function () { notReady('Экспорт логов'); },
 
-    /* настройки */
-    setRemoteOn: function () { setState({ remoteAccess: true }); },
-    setRemoteOff: function () { setState({ remoteAccess: false }); },
-    togglePinVisible: function () { setState({ pinVisible: !state.pinVisible }); },
-    setAuthReqOn: function () {
-      // включаем требование входа; не выкидываем пользователя из текущей сессии
-      setState({ requireAuth: true, authed: true });
-      saveSettings();
-      showToast('Вход в панель будет запрошен при следующем открытии');
-    },
-    setAuthReqOff: function () { setState({ requireAuth: false }); saveSettings(); showToast('Вход в панель отключён'); },
+    /* настройки безопасности — тумблеры меняют только state, сохраняет «Сохранить» */
+    setAuthReqOn: function () { setState({ requireAuth: true }); },
+    setAuthReqOff: function () { setState({ requireAuth: false }); },
+    setNetOn: function () { setState({ networkAccess: true }); },
+    setNetOff: function () { setState({ networkAccess: false }); },
     addIp: function () { state.allowedIps = state.allowedIps.concat(['']); render(); },
     removeIp: function (el) {
       var idx = parseInt(el.getAttribute('data-idx'), 10);
@@ -1392,12 +1404,26 @@
       var idx = parseInt(el.getAttribute('data-idx'), 10);
       state.allowedIps[idx] = el.value; // без ре-рендера — сохраняем фокус
     },
-    saveIps: function () {
-      var cleaned = state.allowedIps.map(function (s) { return s.trim(); }).filter(Boolean);
-      state.allowedIps = cleaned.length ? cleaned : [''];
-      render();
-      saveSettings().then(function () { showToast('Список IP сохранён'); })
-        .catch(function () { showToast('Не удалось сохранить список'); });
+    saveSecurity: function () {
+      var un = document.getElementById('panel-username-input');
+      var pw = document.getElementById('panel-password-input');
+      if (un) state.username = un.value.trim();
+      // почистить IP-поля из DOM в state
+      var cleaned = (state.allowedIps || []).map(function (s) { return (s || '').trim(); }).filter(Boolean);
+      state.allowedIps = cleaned;
+      showToast('Сохраняю настройки…');
+      saveSettings(pw && pw.value ? pw.value : null)
+        .then(function (r) {
+          if (r.status === 400) { return r.json().then(function (d) { showToast(d.error || 'Проверьте настройки'); }); }
+          if (!r.ok) throw new Error();
+          return r.json().then(function (d) {
+            state.hasPassword = state.hasPassword || !!(pw && pw.value);
+            if (pw) pw.value = '';
+            showToast(d.restartRequired ? 'Сохранено. Перезапустите службу для доступа по сети.' : 'Настройки сохранены');
+            loadSettings();
+          });
+        })
+        .catch(function () { showToast('Не удалось сохранить настройки'); });
     },
   };
 
@@ -1489,18 +1515,25 @@
     if (pollInFlight && !force) return;
     pollInFlight = true;
     fetch('/api/status', { cache: 'no-store' })
-      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        if (r.status === 401) {           // сервер требует вход
+          if (!state.needLogin) setState({ needLogin: true });
+          throw { handled: true };
+        }
+        return r.json();
+      })
       .then(function (d) {
+        if (state.needLogin) setState({ needLogin: false, authed: true }); // куки уже валидны
         state.liveStatus = d;
         state.liveError = false;
         state.lastCheck = new Date().toLocaleTimeString('ru-RU');
-        var authGate = state.requireAuth && !state.authed;
-        if (!authGate && liveBackedScreen() && (force || !nameInputFocused())) render();
+        if (!state.needLogin && liveBackedScreen() && (force || !nameInputFocused())) render();
         else patchServiceIndicator();
       })
-      .catch(function () {
+      .catch(function (e) {
+        if (e && e.handled) return;       // 401 уже обработан
         state.liveError = true;
-        if (!(state.requireAuth && !state.authed) && liveBackedScreen()) render();
+        if (!state.needLogin && liveBackedScreen()) render();
         else patchServiceIndicator();
       })
       .then(function () { pollInFlight = false; }, function () { pollInFlight = false; });
