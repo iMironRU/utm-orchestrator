@@ -739,6 +739,9 @@ app.MapPost("/api/update/apply", async (CancellationToken ct) =>
             string staging = Path.Combine(tmp, "staging");
             Directory.CreateDirectory(staging);
 
+            // Дефолтный клиент УВАЖАЕТ системный прокси: внешние загрузки с github.com
+            // в фильтрованных/корпоративных сетях идут через прокси (прямой TLS к CDN
+            // релизов там режется). Обход прокси нужен только для localhost/LAN, не тут.
             using var h = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
             async Task Download(string url, string zipName)
             {

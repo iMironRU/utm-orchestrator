@@ -198,10 +198,18 @@ public sealed class SetupForm : Form
         Task.Run(() => ZipFile.ExtractToDirectory(zip, dest, overwriteFiles: true));
 
     // Находит URL обоих артефактов (app + runtime) в последнем релизе через GitHub API.
+    // Дефолтный клиент уважает системный прокси (нужен для внешних загрузок с GitHub в
+    // фильтрованных/корпоративных сетях). UA обязателен для GitHub API.
+    private static HttpClient NewHttp(TimeSpan timeout)
+    {
+        var h = new HttpClient { Timeout = timeout };
+        h.DefaultRequestHeaders.UserAgent.ParseAdd("UtmOrchestrator-Setup");
+        return h;
+    }
+
     private async Task<(string appUrl, string runtimeUrl)> ResolveAssetsAsync()
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("UtmOrchestrator-Setup"); // GitHub API требует UA
+        using var http = NewHttp(TimeSpan.FromSeconds(30));
         string json = await http.GetStringAsync(LatestReleaseApi);
         using var doc = JsonDocument.Parse(json);
         string? appUrl = null, rtUrl = null;
@@ -220,8 +228,7 @@ public sealed class SetupForm : Form
 
     private async Task DownloadAsync(string url, string dest)
     {
-        using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("UtmOrchestrator-Setup");
+        using var http = NewHttp(TimeSpan.FromMinutes(10));
         using var resp = await http.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
         resp.EnsureSuccessStatusCode();
         long? total = resp.Content.Headers.ContentLength;
