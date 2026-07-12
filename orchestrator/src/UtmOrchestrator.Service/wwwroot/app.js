@@ -269,6 +269,13 @@
       '<span style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';">' + txt + '</span></div>';
   }
 
+  // Версия оркестратора — всегда видно (не только на экране «Обновления»).
+  function orchVersionLine(c) {
+    var d = state.liveStatus;
+    var v = (d && d.orchestratorVersion) ? d.orchestratorVersion : '—';
+    return '<div data-action="goUpdates" title="Открыть обновления" style="padding:4px 12px 2px;font:11px system-ui,sans-serif;color:' + c.textTertiary + ';cursor:pointer;">Оркестратор v' + esc(v) + '</div>';
+  }
+
   function sidebar(c) {
     return '<div style="width:236px;flex-shrink:0;background:' + c.sidebarBg + ';border-right:1px solid ' + c.border + ';padding:20px 14px;display:flex;flex-direction:column;">' +
       '<div style="display:flex;align-items:center;gap:9px;padding:8px 10px 22px;">' +
@@ -279,6 +286,7 @@
       '<div style="flex:1;"></div>' +
       themeSwitch(c) +
       serviceIndicator(c) +
+      orchVersionLine(c) +
     '</div>';
   }
 
@@ -306,6 +314,7 @@
         NAV.map(function (n) { return navItem(n, c, true); }).join('') +
         '<div style="flex:1;"></div>' +
         themeSwitch(c) +
+        orchVersionLine(c) +
       '</div>' +
     '</div>';
   }
