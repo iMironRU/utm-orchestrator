@@ -28,16 +28,34 @@ jobs:
         shell: bash
         run: echo "v=0.1.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
-      - name: Publish payload (self-contained single-file win-x64, versioned)
+      - name: Publish split payload (app + runtime, self-contained win-x64)
         working-directory: orchestrator
         shell: bash
         env:
           VERSION: ${{ steps.ver.outputs.v }}
         run: bash publish.sh
 
-      - name: Package payload zip
+      - name: Read runtime key
+        id: rt
+        shell: bash
+        run: echo "key=$(cat orchestrator/dist/runtime-key.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Package app + runtime zips
         shell: pwsh
-        run: Compress-Archive -Path orchestrator/dist/* -DestinationPath "UtmOrchestrator-win-x64-${{ steps.ver.outputs.v }}.zip" -Force
+        run: |
+          Compress-Archive -Path orchestrator/dist/app/*     -DestinationPath "UtmOrchestrator-app-${{ steps.ver.outputs.v }}.zip" -Force
+          Compress-Archive -Path orchestrator/dist/runtime/* -DestinationPath "UtmOrchestrator-runtime-${{ steps.rt.outputs.key }}-win-x64.zip" -Force
+
+      # ПЕРЕХОДНЫЙ монолит: машины со старой службой ищут UtmOrchestrator-win-x64*.zip,
+      # чтобы обновиться один раз на новую (split) логику. Удалить, когда все машины
+      # перейдут на новую службу.
+      - name: Package legacy monolithic payload (transitional)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path merged -Force | Out-Null
+          Copy-Item orchestrator/dist/runtime/* merged/ -Recurse -Force
+          Copy-Item orchestrator/dist/app/*     merged/ -Recurse -Force
+          Compress-Archive -Path merged/* -DestinationPath "UtmOrchestrator-win-x64-${{ steps.ver.outputs.v }}.zip" -Force
 
       - name: Publish Setup.exe (self-contained, versioned)
         shell: bash
@@ -53,7 +71,8 @@ jobs:
         with:
           name: UtmOrchestrator-${{ steps.ver.outputs.v }}
           path: |
-            UtmOrchestrator-win-x64-${{ steps.ver.outputs.v }}.zip
+            UtmOrchestrator-app-${{ steps.ver.outputs.v }}.zip
+            UtmOrchestrator-runtime-${{ steps.rt.outputs.key }}-win-x64.zip
             UtmOrchestrator-Setup-${{ steps.ver.outputs.v }}.exe
           if-no-files-found: error
 
@@ -74,7 +93,12 @@ jobs:
             Сборка **${{ steps.ver.outputs.v }}** · коммит ${{ github.sha }}
 
             Установка на новый компьютер: скачайте **UtmOrchestrator-Setup-${{ steps.ver.outputs.v }}.exe** и запустите.
+
+            Артефакты: `app` (наш код, ~5 МБ) + `runtime` (общий .NET, ключ `${{ steps.rt.outputs.key }}`).
+            Самообновление качает только `app`, если рантайм не менялся.
           make_latest: true
           files: |
+            UtmOrchestrator-app-${{ steps.ver.outputs.v }}.zip
+            UtmOrchestrator-runtime-${{ steps.rt.outputs.key }}-win-x64.zip
             UtmOrchestrator-win-x64-${{ steps.ver.outputs.v }}.zip
             UtmOrchestrator-Setup-${{ steps.ver.outputs.v }}.exe

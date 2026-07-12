@@ -728,7 +728,7 @@ app.MapPost("/api/update/apply", async (CancellationToken ct) =>
 {
     if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
     var info = await UtmOrchestrator.Core.Update.UpdateChecker.CheckAsync(ct);
-    if (!info.UpdateAvailable || info.PayloadUrl is null)
+    if (!info.UpdateAvailable || info.AppUrl is null)
         return Results.BadRequest(new { error = "обновление недоступно" });
 
     _ = Task.Run(async () =>
@@ -736,19 +736,37 @@ app.MapPost("/api/update/apply", async (CancellationToken ct) =>
         try
         {
             string tmp = Path.Combine(Path.GetTempPath(), "utmo-update-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(tmp);
-            string zip = Path.Combine(tmp, "payload.zip");
-            ReaderOp.FileLog($"update: качаю {info.PayloadUrl}");
-            using (var h = new HttpClient { Timeout = TimeSpan.FromMinutes(10) })
-            using (var resp = await h.GetAsync(info.PayloadUrl, HttpCompletionOption.ResponseHeadersRead))
-            using (var src = await resp.Content.ReadAsStreamAsync())
-            using (var dst = File.Create(zip))
-                await src.CopyToAsync(dst);
-
             string staging = Path.Combine(tmp, "staging");
-            System.IO.Compression.ZipFile.ExtractToDirectory(zip, staging);
+            Directory.CreateDirectory(staging);
+
+            using var h = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+            async Task Download(string url, string zipName)
+            {
+                string zip = Path.Combine(tmp, zipName);
+                using (var resp = await h.GetAsync(url, HttpCompletionOption.ResponseHeadersRead))
+                using (var src = await resp.Content.ReadAsStreamAsync())
+                using (var dst = File.Create(zip))
+                    await src.CopyToAsync(dst);
+                System.IO.Compression.ZipFile.ExtractToDirectory(zip, staging, overwriteFiles: true);
+            }
+
+            // Наш код качаем всегда; рантайм — только если ключ отличается от установленного.
+            ReaderOp.FileLog($"update: качаю app {info.AppUrl}");
+            await Download(info.AppUrl!, "app.zip");
+
+            string? localKey = null;
+            try { localKey = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "runtime.key")).Trim(); } catch { }
+            bool needRuntime = info.RuntimeUrl is not null
+                && (localKey is null || !string.Equals(localKey, info.RuntimeKey, StringComparison.OrdinalIgnoreCase));
+            if (needRuntime)
+            {
+                ReaderOp.FileLog($"update: рантайм сменился ({localKey ?? "нет"} → {info.RuntimeKey}), качаю {info.RuntimeUrl}");
+                await Download(info.RuntimeUrl!, "runtime.zip");
+            }
+            else ReaderOp.FileLog($"update: рантайм не менялся ({localKey}) — качаю только app");
+
             string updatePs1 = Path.Combine(staging, "update.ps1");
-            if (!File.Exists(updatePs1)) { ReaderOp.FileLog("update: update.ps1 нет в payload"); return; }
+            if (!File.Exists(updatePs1)) { ReaderOp.FileLog("update: update.ps1 нет в app.zip"); return; }
 
             ReaderOp.FileLog($"update: запускаю {updatePs1} (служба перезапустится)");
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(

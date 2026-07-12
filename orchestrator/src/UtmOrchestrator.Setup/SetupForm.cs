@@ -7,19 +7,22 @@ using System.Text.Json;
 namespace UtmOrchestrator.Setup;
 
 /// <summary>
-/// Дружелюбный установщик: скачивает архив продукта из последнего релиза GitHub
-/// (или берёт лежащий рядом UtmOrchestrator-win-x64.zip для офлайна), распаковывает,
-/// запускает install.ps1 (та же логика, что и раньше — регистрация службы, SCardSvr,
-/// автозапуск трея), затем открывает веб-панель на первый запуск (обследование +
-/// подхват существующих УТМ). Запускается с правами администратора (app.manifest).
+/// Дружелюбный установщик: скачивает из последнего релиза GitHub два архива —
+/// app (наш код) и runtime (общий .NET) — (или берёт лежащие рядом app*.zip +
+/// runtime*.zip для офлайна), распаковывает оба в одну папку, запускает install.ps1
+/// (регистрация службы, SCardSvr, автозапуск трея), затем открывает веб-панель на
+/// первый запуск (обследование + подхват существующих УТМ). Права администратора
+/// (app.manifest).
 /// </summary>
 public sealed class SetupForm : Form
 {
-    // Имя пейлоада теперь версионное (UtmOrchestrator-win-x64-0.1.N.zip), поэтому
-    // URL не фиксирован: спрашиваем последний релиз через GitHub API и берём его zip.
+    // Продукт теперь в ДВУХ артефактах: app (наш код) + runtime (общий .NET). Ставим оба
+    // в одну папку — получается self-contained-установка. Имена версионные, поэтому URL
+    // берём из последнего релиза через GitHub API.
     private const string LatestReleaseApi =
         "https://api.github.com/repos/iMironRU/utm-orchestrator/releases/latest";
-    private const string PayloadPrefix = "UtmOrchestrator-win-x64";
+    private const string AppPrefix = "UtmOrchestrator-app";
+    private const string RuntimePrefix = "UtmOrchestrator-runtime";
     private const string PanelUrl = "http://localhost:8090";
 
     private readonly Button _btn;
@@ -133,31 +136,39 @@ public sealed class SetupForm : Form
 
     private async Task InstallAsync()
     {
-        // 1. Найти архив рядом (офлайн, любой UtmOrchestrator-win-x64*.zip) или скачать
-        //    из последнего релиза (URL берём через GitHub API — имя версионное).
-        string zipPath;
-        string? localZip = Directory.EnumerateFiles(AppContext.BaseDirectory, PayloadPrefix + "*.zip").FirstOrDefault();
-        if (localZip is not null)
+        // 1. Найти архивы рядом (офлайн: app*.zip + runtime*.zip) или скачать оба из
+        //    последнего релиза (URL берём через GitHub API — имена версионные).
+        string staging = Path.Combine(Path.GetTempPath(), "utmo-setup-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(staging);
+
+        string? localApp = Directory.EnumerateFiles(AppContext.BaseDirectory, AppPrefix + "*.zip").FirstOrDefault();
+        string? localRt = Directory.EnumerateFiles(AppContext.BaseDirectory, RuntimePrefix + "*.zip").FirstOrDefault();
+        if (localApp is not null && localRt is not null)
         {
-            zipPath = localZip;
-            Log($"Использую локальный архив: {localZip}");
+            Log($"Использую локальные архивы: {Path.GetFileName(localApp)} + {Path.GetFileName(localRt)}");
+            SetStatus("Распаковываю…");
+            await ExtractInto(localRt, staging);
+            await ExtractInto(localApp, staging);   // app поверх рантайма
         }
         else
         {
             SetStatus("Ищу последнюю версию на GitHub…");
-            string url = await ResolvePayloadUrlAsync();
-            zipPath = Path.Combine(Path.GetTempPath(), Path.GetFileName(new Uri(url).LocalPath));
-            SetStatus("Скачиваю последнюю версию…");
-            await DownloadAsync(url, zipPath);
-        }
+            var (appUrl, rtUrl) = await ResolveAssetsAsync();
+            // Рантайм (большой) — первым; наш код (маленький) — поверх.
+            SetStatus("Скачиваю среду выполнения (~65 МБ, один раз)…");
+            string rtZip = Path.Combine(staging, "_runtime.zip");
+            await DownloadAsync(rtUrl, rtZip);
+            SetStatus("Скачиваю приложение…");
+            string appZip = Path.Combine(staging, "_app.zip");
+            await DownloadAsync(appUrl, appZip);
 
-        // 2. Распаковать во временную папку.
-        SetStatus("Распаковываю…");
-        _bar.Style = ProgressBarStyle.Marquee;
-        string staging = Path.Combine(Path.GetTempPath(), "utmo-setup-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(staging);
-        await Task.Run(() => ZipFile.ExtractToDirectory(zipPath, staging, overwriteFiles: true));
-        Log("Распаковано в " + staging);
+            SetStatus("Распаковываю…");
+            _bar.Style = ProgressBarStyle.Marquee;
+            await ExtractInto(rtZip, staging);
+            await ExtractInto(appZip, staging);
+            try { File.Delete(rtZip); File.Delete(appZip); } catch { }
+        }
+        Log("Подготовлено в " + staging);
 
         // 3. Найти install.ps1 (лежит в корне архива).
         string installPs1 = Directory.EnumerateFiles(staging, "install.ps1", SearchOption.AllDirectories).FirstOrDefault()
@@ -183,25 +194,28 @@ public sealed class SetupForm : Form
         try { Directory.Delete(staging, recursive: true); } catch { }
     }
 
-    // Находит URL zip-пейлоада в последнем релизе через GitHub API (имя версионное).
-    private async Task<string> ResolvePayloadUrlAsync()
+    private static Task ExtractInto(string zip, string dest) =>
+        Task.Run(() => ZipFile.ExtractToDirectory(zip, dest, overwriteFiles: true));
+
+    // Находит URL обоих артефактов (app + runtime) в последнем релизе через GitHub API.
+    private async Task<(string appUrl, string runtimeUrl)> ResolveAssetsAsync()
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
         http.DefaultRequestHeaders.UserAgent.ParseAdd("UtmOrchestrator-Setup"); // GitHub API требует UA
         string json = await http.GetStringAsync(LatestReleaseApi);
         using var doc = JsonDocument.Parse(json);
+        string? appUrl = null, rtUrl = null;
         if (doc.RootElement.TryGetProperty("assets", out var assets))
             foreach (var a in assets.EnumerateArray())
             {
                 string name = a.GetProperty("name").GetString() ?? "";
-                if (name.StartsWith(PayloadPrefix) && name.EndsWith(".zip"))
-                {
-                    string url = a.GetProperty("browser_download_url").GetString()!;
-                    Log("Последний релиз: " + name);
-                    return url;
-                }
+                if (!name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)) continue;
+                if (name.StartsWith(AppPrefix, StringComparison.OrdinalIgnoreCase)) { appUrl = a.GetProperty("browser_download_url").GetString(); Log("app: " + name); }
+                else if (name.StartsWith(RuntimePrefix, StringComparison.OrdinalIgnoreCase)) { rtUrl = a.GetProperty("browser_download_url").GetString(); Log("runtime: " + name); }
             }
-        throw new Exception($"в последнем релизе нет архива {PayloadPrefix}*.zip");
+        if (appUrl is null || rtUrl is null)
+            throw new Exception("в последнем релизе нет пары app+runtime архивов");
+        return (appUrl, rtUrl);
     }
 
     private async Task DownloadAsync(string url, string dest)

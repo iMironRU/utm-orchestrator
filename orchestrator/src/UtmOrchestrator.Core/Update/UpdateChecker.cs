@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace UtmOrchestrator.Core.Update;
 
@@ -7,6 +8,12 @@ namespace UtmOrchestrator.Core.Update;
 /// Проверяет последний релиз оркестратора на GitHub и сравнивает с текущей версией.
 /// Каждый оркестратор проверяет сам — поэтому две (и больше) машины видят обновление
 /// независимо, без внешнего «обновлятора».
+///
+/// Релиз содержит ДВА артефакта:
+///   UtmOrchestrator-app-&lt;версия&gt;.zip           — наш код (~5 МБ, каждый релиз)
+///   UtmOrchestrator-runtime-&lt;key&gt;-win-x64.zip   — общий .NET-рантайм (~65 МБ, редко)
+/// Самообновление качает app; runtime — только если ключ отличается от установленного
+/// (файл runtime.key рядом с exe). Так рантайм не скачивается «каждый раз».
 /// </summary>
 public static class UpdateChecker
 {
@@ -19,7 +26,13 @@ public static class UpdateChecker
 
     static UpdateChecker() => _http.DefaultRequestHeaders.UserAgent.ParseAdd("UtmOrchestrator");
 
-    public sealed record Info(string Current, string? Latest, bool UpdateAvailable, string? PayloadUrl, bool Reachable);
+    public sealed record Info(
+        string Current, string? Latest, bool UpdateAvailable,
+        string? AppUrl, string? RuntimeUrl, string? RuntimeKey, bool Reachable);
+
+    // Ключ рантайма из имени ассета: UtmOrchestrator-runtime-<key>-win-x64.zip
+    private static readonly Regex RuntimeName =
+        new(@"^UtmOrchestrator-runtime-([0-9a-f]+)-win-x64\.zip$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public static async Task<Info> CheckAsync(CancellationToken ct = default)
     {
@@ -33,25 +46,29 @@ public static class UpdateChecker
             string tag = root.TryGetProperty("tag_name", out var t) ? (t.GetString() ?? "") : "";
             string latest = tag.TrimStart('v', 'V');
 
-            string? payloadUrl = null;
+            string? appUrl = null, runtimeUrl = null, runtimeKey = null;
             if (root.TryGetProperty("assets", out var assets))
                 foreach (var a in assets.EnumerateArray())
                 {
                     string name = a.GetProperty("name").GetString() ?? "";
-                    if (name.StartsWith("UtmOrchestrator-win-x64", StringComparison.OrdinalIgnoreCase)
+                    string url = a.GetProperty("browser_download_url").GetString() ?? "";
+                    if (name.StartsWith("UtmOrchestrator-app", StringComparison.OrdinalIgnoreCase)
                         && name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-                        payloadUrl = a.GetProperty("browser_download_url").GetString();
+                        appUrl = url;
+                    var m = RuntimeName.Match(name);
+                    if (m.Success) { runtimeUrl = url; runtimeKey = m.Groups[1].Value; }
                 }
 
             bool newer = Version.TryParse(latest, out var lv)
                       && Version.TryParse(current, out var cv) && lv > cv;
-            return new Info(current, string.IsNullOrEmpty(latest) ? null : latest, newer && payloadUrl != null, payloadUrl, Reachable: true);
+            return new Info(current, string.IsNullOrEmpty(latest) ? null : latest,
+                newer && appUrl != null, appUrl, runtimeUrl, runtimeKey, Reachable: true);
         }
         catch
         {
             // GitHub недоступен (нет сети/таймаут/блокировка) — Reachable=false, чтобы UI
             // показал «не удалось проверить» с кнопкой повтора, а не вечное «проверка…».
-            return new Info(current, null, false, null, Reachable: false);
+            return new Info(current, null, false, null, null, null, Reachable: false);
         }
     }
 }
