@@ -53,7 +53,10 @@ app.Use(async (ctx, next) =>
     // С localhost вход не спрашиваем: оператор за машиной доверенный, трей читает статус
     // без куки, и нет риска локаута (можно сбросить пароль локально).
     string path = ctx.Request.Path.Value ?? "";
-    if (s.RequireAuth && !isLocal && path.StartsWith("/api/") && path != "/api/auth/login")
+    // /api/update/status публичен: оверлей обновления опрашивает версию после рестарта
+    // службы, когда сессия в памяти уже сброшена — иначе он зависает на 401.
+    if (s.RequireAuth && !isLocal && path.StartsWith("/api/")
+        && path != "/api/auth/login" && path != "/api/update/status")
     {
         if (!PanelAuth.Valid(ctx.Request.Cookies[PanelAuth.Cookie]))
         {

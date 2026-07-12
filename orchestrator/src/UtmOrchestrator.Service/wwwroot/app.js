@@ -1567,10 +1567,11 @@
       }
     });
 
-    // изменения select
+    // изменения select — ТОЛЬКО если data-action на самом элементе (иначе change при
+    // уходе фокуса с инпута формы «всплывал» до формы login и пытался авторизоваться).
     appEl.addEventListener('change', function (e) {
-      var el = e.target.closest('[data-action]');
-      if (el) runAction(el.getAttribute('data-action'), el, e);
+      var a = e.target.getAttribute && e.target.getAttribute('data-action');
+      if (a) runAction(a, e.target, e);
     });
 
     // ввод в текстовые поля (поиск логов, IP)
