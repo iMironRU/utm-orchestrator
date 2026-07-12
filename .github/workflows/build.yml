@@ -57,14 +57,13 @@ jobs:
           Copy-Item orchestrator/dist/app/*     merged/ -Recurse -Force
           Compress-Archive -Path merged/* -DestinationPath "UtmOrchestrator-win-x64-${{ steps.ver.outputs.v }}.zip" -Force
 
-      - name: Publish Setup.exe (self-contained, versioned)
+      - name: Publish Setup.exe (Native AOT bootstrapper, versioned)
         shell: bash
         run: |
-          dotnet publish orchestrator/src/UtmOrchestrator.Setup/UtmOrchestrator.Setup.csproj \
-            -c Release -r win-x64 --self-contained true \
-            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
-            -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.ver.outputs.v }} -o setup-out
-          cp "setup-out/UtmOrchestrator-Setup.exe" "UtmOrchestrator-Setup-${{ steps.ver.outputs.v }}.exe"
+          dotnet publish orchestrator/src/UtmOrchestrator.Boot/UtmOrchestrator.Boot.csproj \
+            -c Release -r win-x64 -p:Version=${{ steps.ver.outputs.v }} -o boot-out
+          cp "boot-out/UtmOrchestrator-Setup.exe" "UtmOrchestrator-Setup-${{ steps.ver.outputs.v }}.exe"
+          ls -lh "UtmOrchestrator-Setup-${{ steps.ver.outputs.v }}.exe"
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4

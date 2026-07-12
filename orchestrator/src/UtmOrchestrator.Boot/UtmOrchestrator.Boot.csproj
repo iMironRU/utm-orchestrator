@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Крошечный (~2-4 МБ) Native AOT-бутстрапер установки. Заменяет 68 МБ self-contained
+    WinForms Setup.exe: рантайм не вшивается — качаем app + runtime из релиза и ставим.
+    Консольный (WinForms несовместим с AOT). Строго AOT-безопасный код: JsonDocument,
+    ZipFile, HttpClient, Process — без рефлексии/сериализации.
+    AOT-публикация требует C++-тулчейна (есть в CI windows-latest). Локально —
+    только `dotnet build`/`run` (IL), публикация с AOT падает без линкера.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishAot>true</PublishAot>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>UtmOrchestrator-Setup</AssemblyName>
+    <AssemblyTitle>УТМ:Оркестратор — установка</AssemblyTitle>
+    <OptimizationPreference>Size</OptimizationPreference>
+    <StackTraceSupport>false</StackTraceSupport>
+  </PropertyGroup>
+
+</Project>
