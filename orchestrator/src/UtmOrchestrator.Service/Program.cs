@@ -49,9 +49,11 @@ app.Use(async (ctx, next) =>
         return;
     }
 
-    // Авторизация: RequireAuth → все /api/* (кроме входа) требуют валидный сеанс.
+    // Авторизация: RequireAuth → /api/* (кроме входа) требуют вход, но ТОЛЬКО по сети.
+    // С localhost вход не спрашиваем: оператор за машиной доверенный, трей читает статус
+    // без куки, и нет риска локаута (можно сбросить пароль локально).
     string path = ctx.Request.Path.Value ?? "";
-    if (s.RequireAuth && path.StartsWith("/api/") && path != "/api/auth/login")
+    if (s.RequireAuth && !isLocal && path.StartsWith("/api/") && path != "/api/auth/login")
     {
         if (!PanelAuth.Valid(ctx.Request.Cookies[PanelAuth.Cookie]))
         {
