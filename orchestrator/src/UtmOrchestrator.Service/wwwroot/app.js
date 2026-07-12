@@ -617,6 +617,7 @@
         '<button data-action="utmPrimary" data-name="' + esc(sel.name) + '" data-service="' + esc(sel.service) + '" data-label="' + esc(sel.primaryLabel) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">' + esc(sel.primaryLabel) + '</button>' +
         '<button data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Открыть УТМ ↗</button>' +
         '<button data-action="openLogsFor" data-port="' + esc(sel.port) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Логи</button>' +
+        '<button data-action="queryUnprocessed" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Запросить необработанные накладные</button>' +
       '</div>' +
       rebindBlock +
     '</div>';
@@ -752,7 +753,11 @@
       '<div style="flex:1;min-width:180px;font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Если токен «завис» — «Полечить токены»: перезапуск службы смарт-карт и подъём всех УТМ. Делает служба сама (~1-2 мин, обмен со всеми УТМ на это время прервётся).</div>' +
       healBtn + '</div>';
 
-    return '<div style="display:flex;flex-direction:column;gap:14px;">' + note + rows + '</div>';
+    var nattnNote = '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;flex-wrap:wrap;">' +
+      '<div style="flex:1;min-width:180px;font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">После переноса или сбоя — «Запросить необработанные накладные»: у ЕГАИС по всем УТМ запрашиваются входящие ТТН, по которым не отправлен акт. Они придут в очереди УТМ, учётная система заберёт их оттуда.</div>' +
+      '<button data-action="queryUnprocessedAll" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Запросить необработанные (все УТМ)</button></div>';
+
+    return '<div style="display:flex;flex-direction:column;gap:14px;">' + note + nattnNote + rows + '</div>';
   }
 
   /* ====================== ЭКРАН: УСТАНОВКА ======================
@@ -1441,6 +1446,32 @@
 
     /* деталь УТМ */
     stopUtm: function () { notReady('Остановка УТМ'); },
+    /* Запросить у ЕГАИС все необработанные накладные (ТТН без акта) для одного УТМ. */
+    queryUnprocessed: function (el) {
+      var service = el.getAttribute('data-service');
+      var name = el.getAttribute('data-name') || service;
+      askConfirm({ title: 'Необработанные накладные', okLabel: 'Запросить',
+        message: 'Запросить у ЕГАИС все накладные «' + name + '», по которым не отправлен акт?\nОни придут в очередь УТМ (/opt/out) — учётная система заберёт их оттуда. Полезно после переноса или сбоя.' }, function () {
+        showToast('Запрашиваю необработанные накладные…');
+        fetch('/api/utm/query-unprocessed', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: service }),
+        })
+          .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+          .then(function (x) { showToast(x.ok ? 'Запрос отправлен — накладные придут в УТМ' : (x.d.error || 'Не удалось отправить запрос')); })
+          .catch(function () { showToast('Не удалось отправить запрос'); });
+      });
+    },
+    /* То же для ВСЕХ УТМ разом (после переноса/сбоя). */
+    queryUnprocessedAll: function () {
+      askConfirm({ title: 'Необработанные накладные — все УТМ', okLabel: 'Запросить для всех',
+        message: 'Запросить у ЕГАИС необработанные накладные (ТТН без акта) для ВСЕХ УТМ?\nПо каждому уйдёт запрос; накладные придут в очереди УТМ. Обычно делают после переноса или сбоя.' }, function () {
+        showToast('Запрашиваю необработанные накладные по всем УТМ…');
+        fetch('/api/utm/query-unprocessed-all', { method: 'POST' })
+          .then(function (r) { return r.json(); })
+          .then(function (d) { showToast('Запрос отправлен: принято ' + (d.accepted || 0) + ' из ' + (d.total || 0) + ' УТМ'); })
+          .catch(function () { showToast('Не удалось отправить запросы'); });
+      });
+    },
     /* Файрвол: открыть/закрыть порт УТМ (правит наше правило через службу).
        При открытии читаем поле внешнего порта и передаём его (храним + проброс если UPnP). */
     toggleFirewall: function (el) {

@@ -69,7 +69,15 @@ app.Use(async (ctx, next) =>
 });
 
 app.UseDefaultFiles();   // отдавать index.html из wwwroot
-app.UseStaticFiles();
+// no-cache: браузер обязан ревалидировать (ETag → 304, если не менялось). Иначе после
+// самообновления оркестратора старый app.js/index.html «залипает» в кэше и новый UI не виден.
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+    {
+        ctx.Context.Response.Headers.CacheControl = "no-cache, must-revalidate";
+    }
+});
 
 // --- Вход/выход в панель ---
 app.MapPost("/api/auth/login", (LoginRequest req, PanelSettings settings, HttpContext ctx) =>
@@ -357,6 +365,47 @@ app.MapPost("/api/utm/external-port", (ExternalPortRequest req) =>
     inst.ExternalPort = ext == inst.Port ? null : ext;
     state.Save(OrchestratorState.DefaultPath);
     return Results.Ok(new { ok = true, service = inst.ServiceName, externalPort = ext });
+});
+
+// --- Запрос необработанных накладных (QueryNATTN → ЕГАИС) для ОДНОГО УТМ ---
+// Просит ЕГАИС прислать все входящие ТТН, по которым ещё не отправлен акт (ответ и сами
+// ТТН придут в /opt/out). Полезно после переноса/сбоя, чтобы дозабрать пропущенное.
+app.MapPost("/api/utm/query-unprocessed", async (RestartRequest req, SerialCache serials, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Service)) return Results.BadRequest(new { error = "service обязателен" });
+    var instances = await UtmDiscovery.DiscoverAsync(ct, scanTokens: false, serials);
+    var inst = instances.FirstOrDefault(i =>
+        string.Equals(i.ServiceName, req.Service, StringComparison.OrdinalIgnoreCase));
+    if (inst is null) return Results.NotFound(new { error = $"УТМ {req.Service} не найден" });
+    if (inst.Port <= 0 || string.IsNullOrEmpty(inst.ExpectedFsrar))
+        return Results.BadRequest(new { error = "УТМ не отвечает или неизвестен его ФСРАР" });
+
+    var r = await UtmOrchestrator.Core.Egais.UtmQueries.RequestUnprocessedAsync(inst.Port, inst.ExpectedFsrar!, ct);
+    ReaderOp.FileLog($"query-unprocessed {req.Service} (ФСРАР {inst.ExpectedFsrar}): {r.Message}");
+    return r.Ok
+        ? Results.Ok(new { ok = true, service = req.Service, replyId = r.ReplyId, message = r.Message })
+        : Results.BadRequest(new { error = r.Message });
+});
+
+// --- Запрос необработанных накладных для ВСЕХ УТМ (сценарий «после переноса/сбоя») ---
+app.MapPost("/api/utm/query-unprocessed-all", async (SerialCache serials, CancellationToken ct) =>
+{
+    var instances = await UtmDiscovery.DiscoverAsync(ct, scanTokens: false, serials);
+    var results = new List<object>();
+    int accepted = 0;
+    foreach (var inst in instances)
+    {
+        if (inst.Port <= 0 || string.IsNullOrEmpty(inst.ExpectedFsrar))
+        {
+            results.Add(new { service = inst.ServiceName, ok = false, message = "нет порта/ФСРАР (УТМ не отвечает)" });
+            continue;
+        }
+        var r = await UtmOrchestrator.Core.Egais.UtmQueries.RequestUnprocessedAsync(inst.Port, inst.ExpectedFsrar!, ct);
+        if (r.Ok) accepted++;
+        results.Add(new { service = inst.ServiceName, ok = r.Ok, message = r.Message });
+    }
+    ReaderOp.FileLog($"query-unprocessed-all: принято {accepted}/{instances.Count}");
+    return Results.Ok(new { ok = true, total = instances.Count, accepted, results });
 });
 
 // --- Статус сети: управляем ли роутером (UPnP), внешний IP, CGNAT, текущие пробросы ---
