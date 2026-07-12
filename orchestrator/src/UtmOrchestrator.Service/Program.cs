@@ -18,11 +18,10 @@ builder.Services.AddSingleton<OrgInfoCache>();
 builder.Services.AddSingleton<PanelSettings>();
 builder.Services.AddSingleton<UtmOrchestrator.Service.Jobs.JobStore>();
 
-// Порт панели (8090). Бинд: только localhost, либо 0.0.0.0 при «доступе по сети»
-// (настройка NetworkAccess). Явный PanelUrl из конфига перекрывает.
-var earlySettings = new PanelSettings().Load();
-string url = builder.Configuration.GetValue<string?>("PanelUrl", null)
-    ?? (earlySettings.NetworkAccess ? "http://0.0.0.0:8090" : "http://127.0.0.1:8090");
+// Порт панели (8090). Биндимся ВСЕГДА на 0.0.0.0, а доступ извне гейтит middleware
+// (когда NetworkAccess выкл — пускаем только localhost). Так смена настройки применяется
+// без перезапуска службы. Явный PanelUrl из конфига перекрывает.
+string url = builder.Configuration.GetValue<string?>("PanelUrl", null) ?? "http://0.0.0.0:8090";
 builder.WebHost.UseUrls(url);
 
 var app = builder.Build();
@@ -33,6 +32,14 @@ app.Use(async (ctx, next) =>
     var s = ctx.RequestServices.GetRequiredService<PanelSettings>().Current;
     var ip = ctx.Connection.RemoteIpAddress;
     bool isLocal = ip is not null && System.Net.IPAddress.IsLoopback(ip);
+
+    // Доступ по сети выключен → пускаем только localhost (бинд всегда 0.0.0.0).
+    if (!s.NetworkAccess && !isLocal)
+    {
+        ctx.Response.StatusCode = 403;
+        await ctx.Response.WriteAsync("доступ по сети выключен");
+        return;
+    }
 
     // IP-allowlist: если задан список и не localhost и не в списке — отказ.
     if (!isLocal && s.AllowedIps.Count > 0 && !s.AllowedIps.Contains(ip?.ToString() ?? ""))
