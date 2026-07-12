@@ -13,12 +13,13 @@ public static class UpdateChecker
     private const string LatestApi = "https://api.github.com/repos/iMironRU/utm-orchestrator/releases/latest";
 
     // UseProxy=false: унаследованный HTTP_PROXY не должен мешать; UA обязателен для API GitHub.
+    // Таймаут короткий (8с): если GitHub недоступен — быстро вернуть «нет связи», а не висеть.
     private static readonly HttpClient _http = new(new SocketsHttpHandler { UseProxy = false })
-    { Timeout = TimeSpan.FromSeconds(20) };
+    { Timeout = TimeSpan.FromSeconds(8) };
 
     static UpdateChecker() => _http.DefaultRequestHeaders.UserAgent.ParseAdd("UtmOrchestrator");
 
-    public sealed record Info(string Current, string? Latest, bool UpdateAvailable, string? PayloadUrl);
+    public sealed record Info(string Current, string? Latest, bool UpdateAvailable, string? PayloadUrl, bool Reachable);
 
     public static async Task<Info> CheckAsync(CancellationToken ct = default)
     {
@@ -44,11 +45,13 @@ public static class UpdateChecker
 
             bool newer = Version.TryParse(latest, out var lv)
                       && Version.TryParse(current, out var cv) && lv > cv;
-            return new Info(current, string.IsNullOrEmpty(latest) ? null : latest, newer && payloadUrl != null, payloadUrl);
+            return new Info(current, string.IsNullOrEmpty(latest) ? null : latest, newer && payloadUrl != null, payloadUrl, Reachable: true);
         }
         catch
         {
-            return new Info(current, null, false, null);
+            // GitHub недоступен (нет сети/таймаут/блокировка) — Reachable=false, чтобы UI
+            // показал «не удалось проверить» с кнопкой повтора, а не вечное «проверка…».
+            return new Info(current, null, false, null, Reachable: false);
         }
     }
 }

@@ -45,7 +45,8 @@
     healing: false,                // идёт лечение
     exports: null,                 // готовые бандлы переноса (null = не грузили)
     twoUtm: null,                  // статус 2UTM (null = не грузили; {present:false} = нет)
-    updateInfo: null,              // {current, latest, updateAvailable} самообновления
+    updateInfo: null,              // {current, latest, updateAvailable, reachable} самообновления
+    checkingUpdate: false,         // идёт запрос проверки версии (спиннер + защита от вечного «проверка…»)
     netStatus: null,               // {manageable, externalIp, lanIp, cgnat} — управляемость роутера
     updating: null,                // {from, target, phase, msg} — оверлей прогресса обновления
     overviewFilter: null,          // null | 'problem'
@@ -866,15 +867,24 @@
     var d = state.liveStatus;
     var orchVer = (d && d.orchestratorVersion) ? d.orchestratorVersion : '—';
     var upd = state.updateInfo;
+    var retryBtn = '<button data-action="checkUpdatesAgain" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:7px 14px;border-radius:8px;font:600 12px system-ui,sans-serif;cursor:pointer;">Проверить снова</button>';
     var updRight;
-    if (upd && upd.updateAvailable) {
+    if (state.checkingUpdate) {
+      updRight = '<span style="display:inline-flex;align-items:center;gap:8px;font:12px system-ui,sans-serif;color:' + c.textTertiary + ';">' +
+        '<span style="width:12px;height:12px;border:2px solid ' + c.border + ';border-top-color:' + c.brand + ';border-radius:50%;display:inline-block;animation:spin .8s linear infinite;"></span>проверяю обновления…</span>';
+    } else if (upd && upd.updateAvailable) {
       updRight = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
         '<span style="font:600 12.5px system-ui,sans-serif;color:' + c.ok + ';">Доступно ' + esc(upd.latest) + '</span>' +
         '<button data-action="updateOrchestrator" style="background:' + c.ok + ';border:none;color:#fff;padding:8px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Обновить</button></div>';
+    } else if (upd && upd.reachable === false) {
+      updRight = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+        '<span style="font:600 12px system-ui,sans-serif;color:' + c.warn + ';">Не удалось проверить — нет связи с GitHub</span>' + retryBtn + '</div>';
     } else if (upd && upd.latest) {
-      updRight = '<span style="font:600 12px system-ui,sans-serif;color:' + c.textTertiary + ';">Актуальная версия</span>';
+      updRight = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+        '<span style="font:600 12px system-ui,sans-serif;color:' + c.textTertiary + ';">Актуальная версия</span>' + retryBtn + '</div>';
     } else {
-      updRight = '<span style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';">проверка обновлений…</span>';
+      updRight = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+        '<span style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';">проверка не запущена</span>' + retryBtn + '</div>';
     }
     var orchestrator = '<div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px 18px;background:' + c.cardBg + ';border:1px solid ' + (upd && upd.updateAvailable ? c.ok : c.border) + ';border-radius:12px;flex-wrap:wrap;">' +
       '<div><div style="font:700 14px system-ui,sans-serif;color:' + c.textPrimary + ';">Оркестратор</div>' +
@@ -955,12 +965,22 @@
       .catch(function () { state.twoUtm = { present: false }; });
   }
 
-  // Проверка обновления оркестратора (экран «Обновления»).
+  // Проверка обновления оркестратора (экран «Обновления»). Свой клиентский таймаут
+  // (12с) + флаг checkingUpdate — чтобы при недоступном GitHub не висело вечное
+  // «проверка…», а показалась ошибка с кнопкой «Проверить снова».
   function loadUpdateInfo() {
-    fetch('/api/update/status', { cache: 'no-store' })
+    if (state.checkingUpdate) return;      // уже проверяем — не дублируем
+    setState({ checkingUpdate: true });
+    var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 12000);
+    fetch('/api/update/status', { cache: 'no-store', signal: ctrl ? ctrl.signal : undefined })
       .then(function (r) { return r.json(); })
-      .then(function (d) { state.updateInfo = d; if (state.screen === 'updates') render(); })
-      .catch(function () { state.updateInfo = { updateAvailable: false }; });
+      .then(function (d) { clearTimeout(timer); setState({ updateInfo: d, checkingUpdate: false }); })
+      .catch(function () {
+        clearTimeout(timer);
+        // сеть/таймаут/abort — считаем GitHub недоступным
+        setState({ updateInfo: { updateAvailable: false, reachable: false }, checkingUpdate: false });
+      });
   }
 
   // Отслеживание обновления по фазам: скачивание (сервер отвечает старой версией) →
@@ -1282,6 +1302,7 @@
     goUtm: function () { setScreen('utm'); },
     goTokens: function () { setScreen('tokens'); },
     goUpdates: function () { setScreen('updates'); loadUpdateInfo(); },
+    checkUpdatesAgain: function () { loadUpdateInfo(); },
     goLogs: function () { setScreen('logs'); loadLogs(); },
     refreshLogs: function () { state.logs = null; render(); loadLogs(); },
     goSettings: function () { setScreen('settings'); if (!state.settingsLoaded) loadSettings(); },
