@@ -739,11 +739,20 @@
       if (!state.scannedTokens.length) {
         scanResult = '<div style="font:12.5px system-ui,sans-serif;color:' + c.textTertiary + ';padding:10px 12px;background:' + c.subtleBg + ';border-radius:8px;">Токены не найдены. Вставьте токен в USB и повторите скан.</div>';
       } else {
+        // серийники, уже привязанные к УТМ (чтобы не предлагать «установить» повторно)
+        var boundSerials = {};
+        ((state.liveStatus && state.liveStatus.instances) || []).forEach(function (i) { if (i.serial) boundSerials[String(i.serial).toLowerCase()] = true; });
         scanResult = '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">Найдено токенов: ' + state.scannedTokens.length + '</div>' +
           state.scannedTokens.map(function (t) {
-            return '<div style="display:flex;flex-direction:column;gap:2px;padding:10px 12px;background:' + c.subtleBg + ';border-radius:8px;">' +
-              '<div style="font:13px ui-monospace,Menlo,Consolas,monospace;color:' + c.textPrimary + ';">Rutoken · ' + esc(t.serial) + '</div>' +
-              '<div style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';">ФСРАР ' + esc(t.fsrar || '—') + ' · ридер ' + esc(t.reader || '—') + '</div></div>';
+            var bound = t.serial && boundSerials[String(t.serial).toLowerCase()];
+            var addBtn = bound
+              ? '<span style="font:600 12px system-ui,sans-serif;color:' + c.ok + ';">уже управляется ✓</span>'
+              : '<button data-action="addUtm" data-serial="' + esc(t.serial) + '" data-fsrar="' + esc(t.fsrar || '') + '" data-reader="' + esc(t.reader || '') + '" style="background:' + c.brand + ';border:none;color:#fff;padding:7px 14px;border-radius:7px;font:600 12px system-ui,sans-serif;cursor:pointer;">Установить УТМ</button>';
+            return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;background:' + c.subtleBg + ';border-radius:8px;flex-wrap:wrap;">' +
+              '<div style="display:flex;flex-direction:column;gap:2px;min-width:0;">' +
+                '<div style="font:13px ui-monospace,Menlo,Consolas,monospace;color:' + c.textPrimary + ';">Rutoken · ' + esc(t.serial) + '</div>' +
+                '<div style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';">ФСРАР ' + esc(t.fsrar || '—') + ' · ридер ' + esc(t.reader || '—') + '</div>' +
+              '</div>' + addBtn + '</div>';
           }).join('');
       }
     }
@@ -1305,6 +1314,26 @@
         if (err) { setState({ scanning: false }); showToast(err); return; }
         setState({ scanning: false, scannedTokens: (res && res.tokens) || [] });
       });
+    },
+
+    /* Установить НОВЫЙ УТМ на выбранный (непривязанный) токен. */
+    addUtm: function (el) {
+      var serial = el.getAttribute('data-serial');
+      var fsrar = el.getAttribute('data-fsrar') || '';
+      var reader = el.getAttribute('data-reader') || '';
+      if (!reader) { showToast('У токена нет ридера — повторите скан'); return; }
+      if (!window.confirm('Установить новый УТМ на токен ' + serial + '?\nОркестратор развернёт чистый УТМ, зарегистрирует службу на свободном порту и привяжет токен (~1-2 мин).')) return;
+      showToast('Устанавливаю УТМ на токен ' + serial + '…');
+      fetch('/api/utm/add', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serial: serial, fsrar: fsrar, reader: reader }),
+      })
+        .then(function (r) {
+          if (r.status === 409) { return r.json().then(function (d) { showToast(d.error || 'Уже идёт операция'); }); }
+          if (!r.ok) throw new Error();
+          showToast('Установка запущена — новый УТМ появится в панели через ~1-2 мин');
+        })
+        .catch(function () { showToast('Не удалось запустить установку'); });
     },
 
     /* Подхватить существующие УТМ под управление (первый запуск): строит state.json

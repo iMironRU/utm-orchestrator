@@ -50,10 +50,34 @@ switch (command)
     case "detect2utm":
         Detect2Utm();
         break;
+    case "regdryrun":
+        RegDryRun();
+        break;
     default:
         Console.WriteLine($"Неизвестная команда: {command}");
         Console.WriteLine("Доступно: scan, readers, status, discover, savebindings, bringup <verify|apply>");
         break;
+}
+
+// Сухой прогон: чистый шаблон + .reg для новой службы Transport7 из эталона Transport.
+// Ничего не импортирует и не разворачивает — только показывает результат правки.
+static void RegDryRun()
+{
+    Console.WriteLine("=== источник шаблона (без копирования) ===");
+    Console.WriteLine("  распакованный офиц. годен: " + UtmOrchestrator.Core.Install.UtmDistCache.IsValid(@"C:\dev-tools\utm-unpacked\app"));
+    Console.WriteLine("  клон из C:\\UTM годен:      " + UtmOrchestrator.Core.Install.UtmDistCache.IsValid(@"C:\UTM"));
+
+    Console.WriteLine("=== install.bat: команда регистрации для Transport7 (dry, из C:\\UTM) ===");
+    string bat = @"C:\UTM\transporter\bin\install.bat";
+    if (System.IO.File.Exists(bat))
+    {
+        string content = System.IO.File.ReadAllText(bat);
+        string modified = System.Text.RegularExpressions.Regex.Replace(
+            content, @"(utm\.exe\s+install\s+)Transport(\s)", "$1Transport7$2");
+        foreach (var line in modified.Split('\n'))
+            if (line.Contains("utm.exe install")) Console.WriteLine("  " + line.Trim().Substring(0, System.Math.Min(160, line.Trim().Length)) + " …");
+    }
+    else Console.WriteLine("  install.bat не найден");
 }
 
 // Обнаружить 2UTM и распарсить его config.ini (read-only) — для миграции.

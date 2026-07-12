@@ -593,6 +593,47 @@ app.MapPost("/api/2utm/restore", () =>
     return Results.Ok(new { ok = true, restored = svc?.Name });
 });
 
+// --- Установка НОВОГО УТМ «с нуля» на подключённый токен (session-0, служба=админ) ---
+// Развернуть чистый шаблон → порт → регистрация службы (install.bat) → файрвол →
+// introduce-привязка → старт → проверка ФСРАР → state.json. Токен должен быть в USB.
+app.MapPost("/api/utm/add", (AddUtmRequest req, SerialCache serials) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    if (string.IsNullOrWhiteSpace(req.Serial) || string.IsNullOrWhiteSpace(req.Reader))
+        return Results.BadRequest(new { error = "нужны serial и reader токена" });
+
+    var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    if (state.Instances.Any(i => string.Equals(i.TokenSerial, req.Serial, StringComparison.OrdinalIgnoreCase)))
+        return Results.Conflict(new { error = "этот токен уже привязан к УТМ" });
+
+    if (!ReaderOp.Gate.Wait(0))
+        return Results.Conflict(new { error = "уже идёт операция с ридерами — попробуйте позже" });
+
+    var allReaders = state.Instances.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
+
+    _ = Task.Run(() =>
+    {
+        using var _ = BringUpStatus.Begin();
+        try
+        {
+            var r = UtmOrchestrator.Core.Install.UtmInstaller.AddNew(
+                req.Serial!, req.Fsrar, req.Reader!, state.Instances, allReaders, req.Port, ReaderOp.FileLog);
+            if (r.Success && r.Instance is not null)
+            {
+                var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+                st.Instances.Add(r.Instance);
+                st.Save(OrchestratorState.DefaultPath);
+                if (!string.IsNullOrEmpty(req.Fsrar)) serials.Learn(req.Fsrar!, req.Serial!);
+                ReaderOp.FileLog($"add УТМ: успех — {r.Message}");
+            }
+            else ReaderOp.FileLog($"add УТМ: НЕ УДАЛОСЬ — {r.Message}");
+        }
+        catch (Exception e) { ReaderOp.FileLog($"add УТМ: СБОЙ — {e}"); }
+        finally { ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true, serial = req.Serial });
+});
+
 // --- Самообновление оркестратора: статус ---
 app.MapGet("/api/update/status", async (CancellationToken ct) =>
 {
@@ -650,6 +691,7 @@ record JobResultRequest(string? Result, string? Error);
 record AdoptToken(string? Serial, string? Fsrar, string? Reader);
 record AdoptRequest(List<AdoptToken>? Tokens);
 record LoginRequest(string? Username, string? Password);
+record AddUtmRequest(string? Serial, string? Fsrar, string? Reader, int? Port);
 record SettingsRequest(bool RequireAuth, string? Username, bool NetworkAccess, List<string>? AllowedIps, string? NewPassword);
 
 // Сериализация операций с ридерами (перезапуск/подъём) + общий файловый лог.
