@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace UtmOrchestrator.Core.State;
 
 /// <summary>
@@ -8,8 +10,19 @@ namespace UtmOrchestrator.Core.State;
 /// </summary>
 public sealed class UtmInstance
 {
-    /// <summary>Веб-порт УТМ (8080, 8081, …).</summary>
+    /// <summary>Веб-порт УТМ (8080, 8081, …) — локальный порт, на котором служба слушает.</summary>
     public int Port { get; set; }
+
+    /// <summary>
+    /// Внешний порт, под которым этот УТМ виден «снаружи» (проброс на роутере
+    /// WAN:ExternalPort → LAN:Port). Хранится как метаданные независимо от того,
+    /// управляем ли мы роутером. null → снаружи тот же порт, что и локальный.
+    /// </summary>
+    public int? ExternalPort { get; set; }
+
+    /// <summary>Эффективный внешний порт: <see cref="ExternalPort"/> либо локальный <see cref="Port"/>.</summary>
+    [JsonIgnore]
+    public int EffectiveExternalPort => ExternalPort ?? Port;
 
     /// <summary>Имя Windows-службы (Transport, Transport2, …).</summary>
     public string ServiceName { get; set; } = string.Empty;

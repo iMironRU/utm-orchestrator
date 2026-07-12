@@ -106,6 +106,14 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
     var instances = await UtmDiscovery.DiscoverAsync(ct, scanTokens: false, serials);
     var health = await new HealthChecker().CheckAsync(instances, ct);
 
+    // Внешние порты (проброс на роутере) хранятся в state.json — обнаружение их не знает.
+    var stored = UtmOrchestrator.Core.State.OrchestratorState.Load(
+        UtmOrchestrator.Core.State.OrchestratorState.DefaultPath);
+    var extPorts = stored.Instances
+        .Where(i => i.ExternalPort.HasValue)
+        .GroupBy(i => i.ServiceName, StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(g => g.Key, g => g.First().ExternalPort!.Value, StringComparer.OrdinalIgnoreCase);
+
     using var http = new UtmHttpClient(TimeSpan.FromSeconds(5));
 
     int ok = 0;
@@ -139,6 +147,7 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
         {
             service = h.Instance.ServiceName,
             port = h.Instance.Port,
+            externalPort = extPorts.TryGetValue(h.Instance.ServiceName, out var ep) ? ep : h.Instance.Port,
             fsrar = h.Info?.OwnerId ?? h.Instance.ExpectedFsrar,
             serial = h.Instance.TokenSerial,
             state = h.ServiceState.ToString(),
@@ -309,8 +318,67 @@ app.MapPost("/api/utm/firewall", (FirewallRequest req) =>
         string.Equals(i.ServiceName, req.Service, StringComparison.OrdinalIgnoreCase));
     if (inst is null) return Results.NotFound(new { error = $"УТМ {req.Service} не найден" });
     if (inst.Port <= 0) return Results.BadRequest(new { error = "у УТМ нет порта" });
+
+    // Внешний порт (проброс на роутере) — метаданные, храним даже без управления роутером.
+    int extPort = req.ExternalPort is int e and > 0 and <= 65535 ? e : inst.Port;
+    if (req.Open)
+    {
+        inst.ExternalPort = extPort == inst.Port ? null : extPort;
+        state.Save(OrchestratorState.DefaultPath);
+    }
+
     UtmOrchestrator.Core.Firewall.FirewallManager.SetPort(inst.Port, req.Open, ReaderOp.FileLog);
-    return Results.Ok(new { ok = true, port = inst.Port, open = req.Open });
+
+    // Роутер трогаем ТОЛЬКО если недавним опросом подтвердили управляемость (UPnP),
+    // иначе синхронный COM-вызов повесил бы запрос на таймаут.
+    string? router = null;
+    if (UtmOrchestrator.Core.Network.UpnpManager.LastManageable == true)
+    {
+        string? lan = UtmOrchestrator.Core.Network.UpnpManager.LanIp();
+        if (req.Open && lan is not null)
+            router = UtmOrchestrator.Core.Network.UpnpManager.AddMapping(extPort, inst.Port, lan, $"UTM {inst.ServiceName}", ReaderOp.FileLog)
+                ? "проброс на роутере создан" : "не удалось создать проброс на роутере";
+        else if (!req.Open)
+            UtmOrchestrator.Core.Network.UpnpManager.RemoveMapping(extPort, ReaderOp.FileLog);
+    }
+    return Results.Ok(new { ok = true, port = inst.Port, externalPort = extPort, open = req.Open, router });
+});
+
+// --- Внешний порт УТМ (метаданные проброса) без изменения файрвола ---
+app.MapPost("/api/utm/external-port", (ExternalPortRequest req) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Service)) return Results.BadRequest(new { error = "service обязателен" });
+    var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var inst = state.Instances.FirstOrDefault(i =>
+        string.Equals(i.ServiceName, req.Service, StringComparison.OrdinalIgnoreCase));
+    if (inst is null) return Results.NotFound(new { error = $"УТМ {req.Service} не найден" });
+    int ext = req.ExternalPort ?? inst.Port;
+    if (ext is <= 0 or > 65535) return Results.BadRequest(new { error = "внешний порт вне диапазона" });
+    inst.ExternalPort = ext == inst.Port ? null : ext;
+    state.Save(OrchestratorState.DefaultPath);
+    return Results.Ok(new { ok = true, service = inst.ServiceName, externalPort = ext });
+});
+
+// --- Статус сети: управляем ли роутером (UPnP), внешний IP, CGNAT, текущие пробросы ---
+app.MapGet("/api/net/status", () =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.Ok(new { manageable = false, error = "только Windows" });
+    var n = UtmOrchestrator.Core.Network.UpnpManager.CachedProbe(TimeSpan.FromSeconds(60));
+    bool cgnat = UtmOrchestrator.Core.Network.UpnpManager.IsPrivateOrCgnat(n.ExternalIp);
+    return Results.Ok(new
+    {
+        manageable = n.Manageable,
+        externalIp = n.ExternalIp,
+        lanIp = n.LanIp,
+        cgnat,           // внешний IP «серый» → проброс бесполезен
+        error = n.Error,
+        mappings = n.Mappings.Select(m => new
+        {
+            externalPort = m.ExternalPort, internalPort = m.InternalPort,
+            internalClient = m.InternalClient, protocol = m.Protocol,
+            enabled = m.Enabled, description = m.Description,
+        }),
+    });
 });
 
 // --- Смена внешнего порта УТМ (session-0): конфиги + брандмауэр + introduce-рестарт ---
@@ -696,7 +764,8 @@ app.Run();
 
 record SetNameRequest(string Serial, string? Name);
 record RestartRequest(string Service);
-record FirewallRequest(string Service, bool Open);
+record FirewallRequest(string Service, bool Open, int? ExternalPort);
+record ExternalPortRequest(string Service, int? ExternalPort);
 record ChangePortRequest(string Service, int NewPort);
 record JobCreateRequest(string Type, string? Params);
 record JobResultRequest(string? Result, string? Error);

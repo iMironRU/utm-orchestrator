@@ -46,6 +46,7 @@
     exports: null,                 // готовые бандлы переноса (null = не грузили)
     twoUtm: null,                  // статус 2UTM (null = не грузили; {present:false} = нет)
     updateInfo: null,              // {current, latest, updateAvailable} самообновления
+    netStatus: null,               // {manageable, externalIp, lanIp, cgnat} — управляемость роутера
     updating: null,                // {from, target, phase, msg} — оверлей прогресса обновления
     overviewFilter: null,          // null | 'problem'
 
@@ -170,6 +171,7 @@
         reason: inst.reason || (st === 'warn' ? 'Требуется внимание' : ''),
         version: inst.version || '—',
         folder: inst.folder || '',
+        externalPort: inst.externalPort || inst.port,
         firewallOpen: inst.firewallOpen === true,
         lastSync: 'только что',
         stoppedAt: 'остановлен',
@@ -211,6 +213,7 @@
       tokenDisplay: u.tokenSerial ? ('Rutoken · ' + u.tokenSerial) : 'нет токена',
       tokenSerial: u.tokenSerial,
       folder: u.folder, version: u.version, internalPorts: u.internalPorts,
+      externalPort: u.externalPort || u.port,
       firewallOpen: u.firewallOpen === true,
       statusLabel: meta.label, statusColor: meta.color, statusBg: meta.bg, status: u.status,
       dotAnim: (u.status === 'warn' || u.status === 'progress') ? 'animation:pulseDot 1.4s ease-in-out infinite;' : '',
@@ -611,6 +614,17 @@
     var fwOpen = sel.firewallOpen;
     var fwColor = fwOpen ? c.ok : c.warn;
     var fwText = fwOpen ? 'открыт' : 'закрыт';
+    var extPort = sel.externalPort || sel.port;
+    var net = state.netStatus || {};
+    var extIp = net.externalIp || null;
+    var extUrl = 'http://' + (extIp || '&lt;внешний IP&gt;') + ':' + esc(extPort);
+    // строка «роутером управляем»
+    var manageLine = net.manageable === true
+      ? '<span style="color:' + c.ok + ';">роутером управляем (UPnP)</span>' +
+        (net.cgnat ? ' · <span style="color:' + c.warn + ';">но внешний IP «серый» (CGNAT) — проброс не поможет</span>' : '')
+      : (net.manageable === false
+        ? '<span style="color:' + c.textTertiary + ';">роутером не управляем — проброс задайте в роутере вручную</span>'
+        : '<span style="color:' + c.textTertiary + ';">проверяю управляемость роутера…</span>');
     var fwBtn = '<button data-action="toggleFirewall" data-service="' + esc(sel.service) + '" data-open="' + (fwOpen ? '0' : '1') + '" ' +
       'style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:7px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">' +
       (fwOpen ? 'Закрыть порт' : 'Открыть порт') + '</button>';
@@ -620,18 +634,30 @@
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">' +
         '<div style="display:flex;align-items:center;gap:8px;font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">' +
           '<span style="width:9px;height:9px;border-radius:50%;background:' + fwColor + ';flex-shrink:0;"></span>' +
-          'Порт ' + esc(sel.port) + ' в брандмауэре ОС: <b style="color:' + fwColor + ';">' + fwText + '</b></div>' +
+          'Локальный порт ' + esc(sel.port) + ' в брандмауэре ОС: <b style="color:' + fwColor + ';">' + fwText + '</b></div>' +
         fwBtn +
       '</div>' +
-      // смена порта
+      // внешний порт (проброс на роутере) — метаданные, храним всегда
+      '<div style="display:flex;flex-direction:column;gap:8px;padding-top:10px;border-top:1px solid ' + c.border + ';">' +
+        '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+          '<span style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">Внешний порт (снаружи):</span>' +
+          '<input id="extport-input" type="number" min="1" max="65535" value="' + esc(extPort) + '" ' +
+            'style="width:100px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:7px 10px;border-radius:7px;font:13px ui-monospace,Menlo,Consolas,monospace;"/>' +
+          '<button data-action="saveExternalPort" data-service="' + esc(sel.service) + '" ' +
+            'style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:7px 12px;border-radius:8px;font:600 12px system-ui,sans-serif;cursor:pointer;">Сохранить</button>' +
+        '</div>' +
+        '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">Внешний адрес: <a href="' + extUrl + '" target="_blank" rel="noopener" style="color:' + c.brand + ';text-decoration:none;font-family:ui-monospace,Menlo,Consolas,monospace;">' + extUrl + '</a></div>' +
+        '<div style="font:11.5px system-ui,sans-serif;">' + manageLine + '</div>' +
+      '</div>' +
+      // смена локального порта
       '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:10px;border-top:1px solid ' + c.border + ';">' +
-        '<span style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">Изменить порт:</span>' +
+        '<span style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">Изменить локальный порт:</span>' +
         '<input id="port-edit-input" type="number" min="1" max="65535" value="' + esc(sel.port) + '" ' +
           'style="width:110px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:7px 10px;border-radius:7px;font:13px ui-monospace,Menlo,Consolas,monospace;"/>' +
         '<button data-action="changePort" data-service="' + esc(sel.service) + '" ' +
           'style="background:' + c.brand + ';border:none;color:#fff;padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Изменить порт</button>' +
       '</div>' +
-      '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">Смена порта перезапустит УТМ (~1 мин, обмен прервётся), поправит его конфиг и перенесёт правило брандмауэра.</div>' +
+      '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">Локальный порт — на нём слушает служба (правило брандмауэра). Внешний порт — под которым УТМ виден из интернета через проброс на роутере; если роутером управляем по UPnP, при открытии порта проброс создаётся автоматически. Смена локального порта перезапустит УТМ (~1 мин, обмен прервётся).</div>' +
     '</div>';
 
     // --- Перенос на другой компьютер ---
@@ -904,6 +930,15 @@
       .catch(function () { state.logs = []; if (state.screen === 'logs') render(); });
   }
 
+  // Статус сети (управляем ли роутером по UPnP, внешний IP, CGNAT). Первый вызов
+  // может занять до ~8с (COM-опрос роутера) — грузим асинхронно, не блокируя UI.
+  function loadNetStatus() {
+    fetch('/api/net/status', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { state.netStatus = d; if (state.screen === 'utm-detail') render(); })
+      .catch(function () { /* оставляем null — покажем «проверяю…» */ });
+  }
+
   // Готовые бандлы переноса (для карточки УТМ: экспорт + скачивание).
   function loadExports() {
     fetch('/api/exports', { cache: 'no-store' })
@@ -1101,8 +1136,8 @@
     // --- Файрвол ---
     var firewall = '<div style="display:flex;flex-direction:column;gap:12px;padding:16px 18px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
       '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">' +
-        '<div><div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Файрвол по умолчанию</div>' +
-        '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:2px;">Открывать порты УТМ автоматически</div></div>' +
+        '<div><div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Открывать порт при установке нового УТМ</div>' +
+        '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:2px;">Только для новых УТМ. Открыть/закрыть порт уже существующего — в карточке УТМ → «Порт и доступ».</div></div>' +
         segmented(c, [
           { label: 'Да', active: state.firewallAuto, action: 'setFirewallYes' },
           { label: 'Нет', active: !state.firewallAuto, action: 'setFirewallNo' },
@@ -1252,7 +1287,7 @@
     goSettings: function () { setScreen('settings'); if (!state.settingsLoaded) loadSettings(); },
     goInstall: function () { setState({ screen: 'install', mobileNavOpen: false, notifOpen: false }); load2Utm(); },
 
-    openUtm: function (el) { setState({ screen: 'utm-detail', selectedUtmId: el.getAttribute('data-id'), mobileNavOpen: false, notifOpen: false }); loadExports(); },
+    openUtm: function (el) { setState({ screen: 'utm-detail', selectedUtmId: el.getAttribute('data-id'), mobileNavOpen: false, notifOpen: false }); loadExports(); loadNetStatus(); },
     /* Экспорт УТМ для переноса (стоп → бандл → introduce-возврат; источник цел). */
     exportUtm: function (el) {
       var service = el.getAttribute('data-service');
@@ -1337,18 +1372,47 @@
 
     /* деталь УТМ */
     stopUtm: function () { notReady('Остановка УТМ'); },
-    /* Файрвол: открыть/закрыть порт УТМ (правит наше правило через службу). */
+    /* Файрвол: открыть/закрыть порт УТМ (правит наше правило через службу).
+       При открытии читаем поле внешнего порта и передаём его (храним + проброс если UPnP). */
     toggleFirewall: function (el) {
       var service = el.getAttribute('data-service');
       var open = el.getAttribute('data-open') === '1';
+      var body = { service: service, open: open };
+      if (open) {
+        var inp = document.getElementById('extport-input');
+        var ext = inp ? parseInt(inp.value, 10) : NaN;
+        if (inp && !(ext >= 1 && ext <= 65535)) { showToast('Внешний порт должен быть 1–65535'); return; }
+        if (inp) body.externalPort = ext;
+      }
       showToast(open ? 'Открываю порт в брандмауэре…' : 'Закрываю порт в брандмауэре…');
       fetch('/api/utm/firewall', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ service: service, open: open }),
+        body: JSON.stringify(body),
       })
         .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
-        .then(function (d) { showToast(d.open ? 'Порт открыт в брандмауэре' : 'Порт закрыт в брандмауэре'); pollStatus(true); })
+        .then(function (d) {
+          var msg = d.open ? 'Порт открыт в брандмауэре' : 'Порт закрыт в брандмауэре';
+          if (d.router) msg += ' · ' + d.router;
+          showToast(msg);
+          loadNetStatus();
+          pollStatus(true);
+        })
         .catch(function () { showToast('Не удалось изменить правило брандмауэра'); });
+    },
+    /* Сохранить внешний порт УТМ (метаданные проброса; файрвол не трогаем). */
+    saveExternalPort: function (el) {
+      var service = el.getAttribute('data-service');
+      var inp = document.getElementById('extport-input');
+      if (!inp) return;
+      var ext = parseInt(inp.value, 10);
+      if (!(ext >= 1 && ext <= 65535)) { showToast('Внешний порт должен быть 1–65535'); return; }
+      fetch('/api/utm/external-port', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ service: service, externalPort: ext }),
+      })
+        .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+        .then(function () { showToast('Внешний порт сохранён'); pollStatus(true); })
+        .catch(function () { showToast('Не удалось сохранить внешний порт'); });
     },
     /* Смена внешнего порта УТМ (перезапуск через introduce на новом порту). */
     changePort: function (el) {
