@@ -46,6 +46,7 @@
     exports: null,                 // готовые бандлы переноса (null = не грузили)
     twoUtm: null,                  // статус 2UTM (null = не грузили; {present:false} = нет)
     updateInfo: null,              // {current, latest, updateAvailable} самообновления
+    updating: null,                // {from, target, phase, msg} — оверлей прогресса обновления
     overviewFilter: null,          // null | 'problem'
 
     /* --- аутентификация «по галочке» (доп. требование продукта) --- */
@@ -923,6 +924,41 @@
       .catch(function () { state.updateInfo = { updateAvailable: false }; });
   }
 
+  // Отслеживание обновления по фазам: скачивание (сервер отвечает старой версией) →
+  // перезапуск (сервер не отвечает) → готово (сервер вернулся с НОВОЙ версией → reload).
+  var updateTimer = null;
+  function pollUpdate() {
+    var started = Date.now();
+    var sawDown = false;
+    if (updateTimer) clearInterval(updateTimer);
+    updateTimer = setInterval(function () {
+      if (!state.updating) { clearInterval(updateTimer); return; }
+      if (Date.now() - started > 240000) {
+        clearInterval(updateTimer);
+        setState({ updating: Object.assign({}, state.updating, { phase: 'timeout', msg: 'Дольше обычного. Обновите страницу вручную (F5).' }) });
+        return;
+      }
+      fetch('/api/update/status', { cache: 'no-store' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!state.updating) return;
+          if (d.current && state.updating.from && d.current !== state.updating.from) {
+            clearInterval(updateTimer);
+            setState({ updating: Object.assign({}, state.updating, { phase: 'done', msg: 'Готово! Версия ' + d.current }) });
+            setTimeout(function () { window.location.reload(); }, 1800);
+          } else {
+            setState({ updating: Object.assign({}, state.updating, sawDown
+              ? { phase: 'restart', msg: 'Служба поднимается…' }
+              : { phase: 'download', msg: 'Скачивание и подготовка обновления…' }) });
+          }
+        })
+        .catch(function () {
+          sawDown = true;
+          if (state.updating) setState({ updating: Object.assign({}, state.updating, { phase: 'restart', msg: 'Перезапуск службы…' }) });
+        });
+    }, 3000);
+  }
+
   /* Связка веб↔трей: создать интерактивное задание и дождаться результата.
      onDone(resultObj|null, errorText|null). Требует запущенный трей (он «руки»). */
   function runJob(type, onDone) {
@@ -1126,6 +1162,48 @@
     return '<div style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:' + c.toastBg + ';color:#fff;padding:11px 20px;border-radius:9px;font:600 13px system-ui,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.3);z-index:60;white-space:nowrap;">' + esc(state.toast) + '</div>';
   }
 
+  // Полноэкранный оверлей прогресса обновления оркестратора.
+  function updateOverlay(c) {
+    var u = state.updating;
+    var done = u.phase === 'done', timeout = u.phase === 'timeout';
+    var steps = [
+      { key: 'download', label: 'Скачивание обновления' },
+      { key: 'restart', label: 'Перезапуск службы' },
+      { key: 'done', label: 'Готово' },
+    ];
+    var order = { download: 0, restart: 1, done: 2, timeout: 1 };
+    var cur = order[u.phase];
+    var stepsHTML = steps.map(function (st, i) {
+      var state2 = i < cur ? 'done' : (i === cur ? 'active' : 'pending');
+      var dot = state2 === 'done'
+        ? '<div style="width:18px;height:18px;border-radius:50%;background:' + c.okBg + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;color:' + c.ok + ';font:700 11px system-ui;">✓</div>'
+        : state2 === 'active' && !timeout && !done
+          ? '<div style="width:18px;height:18px;border-radius:50%;border:2px solid ' + c.brand + ';border-top-color:transparent;flex-shrink:0;animation:spin .7s linear infinite;"></div>'
+          : '<div style="width:18px;height:18px;border-radius:50%;background:' + c.subtleBg + ';flex-shrink:0;"></div>';
+      var col = state2 === 'pending' ? c.textTertiary : c.textPrimary;
+      return '<div style="display:flex;align-items:center;gap:10px;"><span>' + dot + '</span><span style="font:12.5px system-ui,sans-serif;color:' + col + ';">' + st.label + '</span></div>';
+    }).join('');
+
+    var topIcon = done
+      ? '<div style="width:48px;height:48px;border-radius:50%;background:' + c.okBg + ';display:flex;align-items:center;justify-content:center;color:' + c.ok + ';font:700 22px system-ui;">✓</div>'
+      : timeout
+        ? '<div style="width:48px;height:48px;border-radius:50%;background:' + c.warnBg + ';display:flex;align-items:center;justify-content:center;color:' + c.warn + ';font:700 22px system-ui;">⚠</div>'
+        : '<div style="width:44px;height:44px;border-radius:50%;border:3px solid ' + c.brand + ';border-top-color:transparent;animation:spin .8s linear infinite;"></div>';
+
+    var footer = done ? 'Перезагружаю панель…'
+      : timeout ? '<button data-action="reloadPage" style="background:' + c.brand + ';border:none;color:#fff;padding:9px 18px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Обновить страницу</button>'
+      : 'Не закрывайте окно — панель ненадолго станет недоступна и вернётся сама.';
+
+    return '<div style="position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px;">' +
+      '<div style="width:100%;max-width:360px;background:' + c.cardBg + ';border-radius:16px;padding:28px;display:flex;flex-direction:column;gap:18px;align-items:center;text-align:center;">' +
+        topIcon +
+        '<div style="font:700 16px system-ui,sans-serif;color:' + c.textPrimary + ';">Обновление' + (u.target ? ' до ' + esc(u.target) : '') + '</div>' +
+        '<div style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';min-height:16px;">' + esc(u.msg || '') + '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:9px;width:100%;max-width:220px;text-align:left;">' + stepsHTML + '</div>' +
+        '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">' + footer + '</div>' +
+      '</div></div>';
+  }
+
   function view() {
     var c = colors();
     var showLogin = state.needLogin && !state.authed;
@@ -1133,6 +1211,7 @@
       (showLogin ? loginScreen(c) : appBody(c)) +
       (state.confirmDeleteOpen ? modalHTML(c) : '') +
       (state.toast ? toastHTML(c) : '') +
+      (state.updating ? updateOverlay(c) : '') +
     '</div>';
   }
 
@@ -1393,17 +1472,19 @@
     setFirewallYes: function () { setState({ firewallAuto: true }); },
     setFirewallNo: function () { setState({ firewallAuto: false }); },
 
-    /* Самообновление оркестратора: скачать новый релиз и применить (панель ненадолго ляжет). */
+    /* Самообновление: показываем оверлей с фазами (скачивание → перезапуск → готово). */
     updateOrchestrator: function () {
-      if (!window.confirm('Обновить оркестратор до ' + ((state.updateInfo && state.updateInfo.latest) || 'новой версии') + '?\nПанель и служба перезапустятся (~1-2 минуты). УТМ продолжат работать.')) return;
-      showToast('Скачиваю и применяю обновление…');
+      var info = state.updateInfo || {};
+      if (!window.confirm('Обновить оркестратор до ' + (info.latest || 'новой версии') + '?\nПанель и служба перезапустятся (~1-2 минуты). УТМ продолжат работать.')) return;
+      setState({ updating: { from: info.current || '', target: info.latest || '', phase: 'download', msg: 'Скачиваю обновление…' } });
       fetch('/api/update/apply', { method: 'POST' })
         .then(function (r) {
-          if (!r.ok) return r.json().then(function (d) { showToast(d.error || 'Обновление недоступно'); });
-          showToast('Обновление запущено — панель вернётся через ~1-2 мин, обновите страницу');
+          if (!r.ok) return r.json().then(function (d) { setState({ updating: null }); showToast(d.error || 'Обновление недоступно'); });
+          pollUpdate();
         })
-        .catch(function () { showToast('Не удалось запустить обновление'); });
+        .catch(function () { setState({ updating: null }); showToast('Не удалось запустить обновление'); });
     },
+    reloadPage: function () { window.location.reload(); },
     /* обновление УТМ — в беклоге (Update-UTM), пока честно */
     updateUtm: function () { notReady('Обновление УТМ'); },
 
