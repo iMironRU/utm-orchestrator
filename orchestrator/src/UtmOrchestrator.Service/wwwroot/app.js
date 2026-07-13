@@ -872,7 +872,14 @@
     if (!t || !t.present) return '';
     var svc = t.service || {};
     var running = svc.state === 'Running';
-    var active = t.autostart || running;              // 2UTM ещё рулит на загрузке
+    // 2UTM реально управляет на загрузке ТОЛЬКО если его СЛУЖБА поднимется (запущена или
+    // Auto). autostart в config.ini без установленной службы — мёртвый флаг: запускать
+    // 2UTM некому, эти УТМ уже под оркестратором. Иначе панель ложно кричала «2UTM управляет».
+    var svcState = svc.state || 'NotInstalled';
+    var svcInstalled = svcState !== 'NotInstalled' && svcState !== '-';
+    var svcAuto = svc.startMode === 'Auto' || svc.startMode === 'Automatic';
+    var active = running || (svcInstalled && svcAuto);
+    var adopted = !active && (t.autostart === false || svcState === 'Disabled' || svcState === 'Stopped');
     var count = t.count || (t.utms || []).length;
 
     var rows = (t.utms || []).map(function (u) {
@@ -896,13 +903,24 @@
       '</div>';
     }
 
-    // --- Состояние 2: управление перенято, 2UTM заглушён (папка ещё есть) ---
-    return '<div style="display:flex;flex-direction:column;gap:12px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.ok + ';border-radius:12px;">' +
-      '<div style="display:flex;align-items:center;gap:8px;"><span style="color:' + c.ok + ';font:700 15px system-ui,sans-serif;">✓</span>' +
-        '<span style="font:700 15px system-ui,sans-serif;color:' + c.textPrimary + ';">Управление перенято у 2UTM</span></div>' +
-      '<div style="font:12.5px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">2UTM <b>заглушён</b> (автозапуск off' + (svc.name ? ', служба ' + esc(svc.state) : '') + ') — на загрузке ' + count + ' УТМ поднимает оркестратор. Файлы 2UTM на месте, миграцию можно <b>откатить</b>.</div>' +
+    if (adopted) {
+      // --- Состояние 2: управление перенято нами, 2UTM обратимо заглушён ---
+      return '<div style="display:flex;flex-direction:column;gap:12px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.ok + ';border-radius:12px;">' +
+        '<div style="display:flex;align-items:center;gap:8px;"><span style="color:' + c.ok + ';font:700 15px system-ui,sans-serif;">✓</span>' +
+          '<span style="font:700 15px system-ui,sans-serif;color:' + c.textPrimary + ';">Управление перенято у 2UTM</span></div>' +
+        '<div style="font:12.5px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">2UTM <b>заглушён</b> (автозапуск off' + (svc.name ? ', служба ' + esc(svc.state) : '') + ') — на загрузке ' + count + ' УТМ поднимает оркестратор. Файлы 2UTM на месте, миграцию можно <b>откатить</b>.</div>' +
+        '<div style="display:flex;flex-direction:column;gap:6px;">' + rows + '</div>' +
+        '<div style="margin-top:2px;"><button data-action="restore2Utm" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Вернуть 2UTM</button></div>' +
+      '</div>';
+    }
+
+    // --- Состояние 3: 2UTM найден, но НЕ активен (службы нет) — просто остаток; УТМ ведёт оркестратор ---
+    return '<div style="display:flex;flex-direction:column;gap:12px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
+      '<div style="display:flex;align-items:center;gap:8px;"><span style="width:9px;height:9px;border-radius:50%;background:' + c.ok + ';"></span>' +
+        '<span style="font:700 15px system-ui,sans-serif;color:' + c.textPrimary + ';">Этими УТМ управляет оркестратор</span></div>' +
+      '<div style="font:12.5px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">Папка старого 2UTM на месте, но он <b>не активен</b> — служба не установлена, запускать его на загрузке некому. Флаг автозапуска в его конфиге ни на что не влияет. Всеми ' + count + ' УТМ управляет оркестратор. Для порядка автозапуск 2UTM можно отключить.</div>' +
       '<div style="display:flex;flex-direction:column;gap:6px;">' + rows + '</div>' +
-      '<div style="margin-top:2px;"><button data-action="restore2Utm" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Вернуть 2UTM</button></div>' +
+      '<div style="margin-top:2px;"><button data-action="adopt2Utm" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Отключить автозапуск 2UTM</button></div>' +
     '</div>';
   }
 
