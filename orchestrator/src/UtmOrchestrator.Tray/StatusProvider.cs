@@ -51,7 +51,7 @@ public static class StatusProvider
             bool starting = svc == ServiceState.Running || svc == ServiceState.StartPending;
             return new StatusSnapshot(
                 starting ? OverallStatus.Starting : OverallStatus.Unknown,
-                starting ? "панель запускается…" : "служба не запущена",
+                starting ? "запускается, идёт подъём УТМ (до ~минуты)…" : "служба не запущена",
                 starting, svc, Array.Empty<UtmRow>());
         }
 

@@ -17,6 +17,9 @@ public sealed class TrayAppContext : ApplicationContext
     private MainForm? _form;
     private bool _busy;
 
+    private const int FastPollMs = 2500;   // пока не «Ок» (загрузка/подъём/сбой)
+    private const int IdlePollMs = 8000;   // в устойчивом «Ок»
+
     public TrayAppContext()
     {
         _ok = TrayIcons.Load("tray-ok");
@@ -39,7 +42,9 @@ public sealed class TrayAppContext : ApplicationContext
         };
         _notify.DoubleClick += (_, _) => ShowWindow();
 
-        _timer = new System.Windows.Forms.Timer { Interval = 8000 };
+        // Адаптивный опрос: часто, пока не «Ок» (загрузка/подъём/сбой) — чтобы ловить
+        // готовность за пару секунд, а не ждать полный интервал; в покое — реже.
+        _timer = new System.Windows.Forms.Timer { Interval = FastPollMs };
         _timer.Tick += async (_, _) => await RefreshAsync();
         _timer.Start();
 
@@ -73,6 +78,11 @@ public sealed class TrayAppContext : ApplicationContext
             _notify.Text = Truncate($"{AppInfo.Title} — {snap.Summary}", 63);
 
             _form?.UpdateSnapshot(snap);
+
+            // Пока не «Ок» (идёт подъём/сбой/загрузка) — опрашиваем часто, чтобы
+            // поймать готовность за пару секунд; в устойчивом «Ок» — реже.
+            int want = snap.Overall == OverallStatus.Ok ? IdlePollMs : FastPollMs;
+            if (_timer.Interval != want) _timer.Interval = want;
         }
         catch
         {
