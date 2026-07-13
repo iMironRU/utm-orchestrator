@@ -196,6 +196,10 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
                      : !string.IsNullOrWhiteSpace(orgDisplay) ? orgDisplay!
                      : h.Instance.ServiceName;
 
+        // Реальный статус обмена (из transport_info.log), кэш ~20с — файл читаем не на
+        // каждый опрос. Только если УТМ отвечает (иначе лог не про обмен, а про подъём).
+        var ex = h.IsOk ? ExchangeCache.Get(h.Instance.FolderPath) : null;
+
         list.Add(new
         {
             service = h.Instance.ServiceName,
@@ -219,6 +223,15 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
             formatVersion = h.Info?.Version,  // версия формата (4.2.0)
             firewallOpen = OperatingSystem.IsWindows()
                 && UtmOrchestrator.Core.Firewall.FirewallInspector.IsOpen(h.Instance.Port), // порт открыт в брандмауэре?
+            // Реальный обмен с ЕГАИС (по логу УТМ): live + сколько назад + счётчики.
+            exchange = ex is null ? null : new
+            {
+                live = ex.Live,
+                agoSeconds = ex.SecondsAgo,
+                pendingCheques = ex.PendingCheques,
+                pendingQueries = ex.PendingQueries,
+                pendingAscp = ex.PendingAscp,
+            },
         });
     }
 
@@ -410,6 +423,26 @@ app.MapPost("/api/utm/external-port", (ExternalPortRequest req) =>
     inst.ExternalPort = ext == inst.Port ? null : ext;
     state.Save(OrchestratorState.DefaultPath);
     return Results.Ok(new { ok = true, service = inst.ServiceName, externalPort = ext });
+});
+
+// --- Логи КОНКРЕТНОГО УТМ (его transport_info.log, а не лог оркестратора) ---
+app.MapGet("/api/utm/log", async (string service, int? limit, string? level, SerialCache serials, CancellationToken ct) =>
+{
+    if (string.IsNullOrWhiteSpace(service)) return Results.BadRequest(new { error = "service обязателен" });
+    var instances = await UtmDiscovery.DiscoverAsync(ct, scanTokens: false, serials);
+    var inst = instances.FirstOrDefault(i => string.Equals(i.ServiceName, service, StringComparison.OrdinalIgnoreCase));
+    if (inst is null) return Results.NotFound(new { error = $"УТМ {service} не найден" });
+
+    string? path = UtmOrchestrator.Core.Diagnostics.UtmLog.LogPath(inst.FolderPath);
+    if (path is null) return Results.Ok(new { service, path = (string?)null, lines = Array.Empty<object>(), note = "лог transport_info.log не найден" });
+
+    var lines = UtmOrchestrator.Core.Diagnostics.UtmLog.Tail(inst.FolderPath, limit ?? 300, level);
+    return Results.Json(new
+    {
+        service,
+        path,
+        lines = lines.Select(l => new { t = l.Time, level = l.Level, msg = l.Text }),
+    });
 });
 
 // --- Запрос необработанных накладных (QueryNATTN → ЕГАИС) для ОДНОГО УТМ ---
@@ -889,6 +922,24 @@ record AdoptRequest(List<AdoptToken>? Tokens);
 record LoginRequest(string? Username, string? Password);
 record AddUtmRequest(string? Serial, string? Fsrar, string? Reader, int? Port);
 record SettingsRequest(bool RequireAuth, string? Username, bool NetworkAccess, List<string>? AllowedIps, string? NewPassword);
+
+// Кэш статуса обмена по папке УТМ: transport_info.log читаем не чаще раза в ~20с
+// (обмен идёт циклами по минутам, чаще незачем; /api/status опрашивают часто).
+static class ExchangeCache
+{
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string,
+        (UtmOrchestrator.Core.Diagnostics.UtmLog.Exchange ex, DateTime exp)> _c = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan Ttl = TimeSpan.FromSeconds(20);
+
+    public static UtmOrchestrator.Core.Diagnostics.UtmLog.Exchange? Get(string? folder)
+    {
+        if (string.IsNullOrWhiteSpace(folder)) return null;
+        if (_c.TryGetValue(folder!, out var v) && v.exp > DateTime.UtcNow) return v.ex;
+        var ex = UtmOrchestrator.Core.Diagnostics.UtmLog.ReadExchange(folder);
+        _c[folder!] = (ex, DateTime.UtcNow + Ttl);
+        return ex;
+    }
+}
 
 // Сериализация операций с ридерами (перезапуск/подъём) + общий файловый лог.
 static class ReaderOp

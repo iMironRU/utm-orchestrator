@@ -47,6 +47,9 @@
     logsFilterLevel: '',
     logsSearch: '',
     logs: null,                    // реальные логи из /api/logs (null = ещё не грузили)
+    utmLog: null,                  // лог конкретного УТМ (transport_info.log)
+    utmLogService: null,           // чей лог показываем (null = лог оркестратора)
+    utmLogName: '',                // отображаемое имя УТМ для заголовка
     settingsLoaded: false,         // подгружены ли настройки с бэка
     scannedTokens: null,           // результат скана токенов трея (null = не сканировали)
     scanning: false,               // идёт скан
@@ -185,6 +188,7 @@
         folder: inst.folder || '',
         externalPort: inst.externalPort || inst.port,
         firewallOpen: inst.firewallOpen === true,
+        exchange: inst.exchange || null,   // реальный обмен из лога УТМ
         lastSync: 'только что',
         stoppedAt: 'остановлен',
         progressLabel: inst.reason || 'Идёт операция',
@@ -206,10 +210,15 @@
     var hasCallout = u.status === 'warn' || u.status === 'error';
     var hasMeta = u.status === 'ok' || u.status === 'stopped';
     var hasExchange = !isProgress;
+    // Реальный обмен из лога УТМ (если есть), иначе — по статусу.
     var exchangeText = '';
-    if (u.status === 'ok') exchangeText = 'Обмен с ЕГАИС идёт · ' + (u.lastSync || '');
+    var ex = u.exchange;
+    if (ex && ex.agoSeconds != null) {
+      if (ex.live) exchangeText = 'Обмен с ЕГАИС идёт · последний цикл ' + fmtSecs(ex.agoSeconds) + ' назад';
+      else exchangeText = 'Обмен НЕ идёт · ' + fmtSecs(ex.agoSeconds) + ' без обмена';
+    } else if (u.status === 'ok') exchangeText = 'Обмен с ЕГАИС идёт';
     else if (u.status === 'warn') exchangeText = 'Обмен приостановлен';
-    else if (u.status === 'error') exchangeText = 'Обмен остановлен · последний успешный ' + (u.lastSync || '—');
+    else if (u.status === 'error') exchangeText = 'Обмен остановлен';
     else if (u.status === 'stopped') exchangeText = 'Обмен не идёт';
     var primaryLabel = 'Перезапустить';
     if (u.status === 'warn') primaryLabel = 'Привязать токен';
@@ -231,6 +240,7 @@
       dotAnim: (u.status === 'warn' || u.status === 'progress') ? 'animation:pulseDot 1.4s ease-in-out infinite;' : '',
       isProgress: isProgress, hasCallout: hasCallout, hasMeta: hasMeta, hasExchange: hasExchange,
       reasonText: u.reason || '', exchangeText: exchangeText, primaryLabel: primaryLabel,
+      exchange: u.exchange || null, exchangeLive: !!(u.exchange && u.exchange.live),
       line1: line1, line2: line2,
       progressLabel: u.progressLabel || '', progress: u.progress || 0, progressTrack: c.subtleBg,
     };
@@ -524,10 +534,13 @@
           '<div style="height:6px;border-radius:3px;background:' + u.progressTrack + ';overflow:hidden;"><div style="height:100%;width:' + u.progress + '%;background:' + u.statusColor + ';border-radius:3px;"></div></div>' +
           '<div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';">' + u.progress + '% · осталось ~2 мин</div></div>'
       : '';
+    // Индикатор обмена по факту: зелёный — идёт, тревожный — стоит (даже если УТМ «зелёный»).
+    var exColor = u.exchange ? (u.exchangeLive ? c.ok : c.warn) : u.statusColor;
+    var exTextColor = (u.exchange && !u.exchangeLive) ? c.warn : c.textSecondary;
     var exchange = u.hasExchange
       ? '<div style="display:flex;align-items:center;gap:6px;">' +
-          '<div style="width:6px;height:6px;border-radius:50%;background:' + u.statusColor + ';flex-shrink:0;"></div>' +
-          '<span style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">' + esc(u.exchangeText) + '</span></div>'
+          '<div style="width:6px;height:6px;border-radius:50%;background:' + exColor + ';flex-shrink:0;"></div>' +
+          '<span style="font:12px system-ui,sans-serif;color:' + exTextColor + ';">' + esc(u.exchangeText) + '</span></div>'
       : '';
     // Вся плитка кликабельна → карточка УТМ. Внутренние ссылки перехватывают клик
     // сами (делегирование берёт ближайший [data-action]), так что они остаются рабочими.
@@ -638,7 +651,7 @@
       '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
         '<button data-action="utmPrimary" data-name="' + esc(sel.name) + '" data-service="' + esc(sel.service) + '" data-label="' + esc(sel.primaryLabel) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">' + esc(sel.primaryLabel) + '</button>' +
         '<button data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Открыть УТМ ↗</button>' +
-        '<button data-action="openLogsFor" data-port="' + esc(sel.port) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Логи</button>' +
+        '<button data-action="openLogsFor" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Логи УТМ</button>' +
         '<button data-action="queryUnprocessed" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Запросить необработанные накладные</button>' +
       '</div>' +
       rebindBlock +
@@ -945,9 +958,11 @@
       '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">УТМ</div>' + rows + note + '</div>';
   }
 
-  /* ====================== ЭКРАН: ЛОГИ (реальные, из /api/logs) ====================== */
+  /* ====================== ЭКРАН: ЛОГИ ======================
+     Источник: лог оркестратора (/api/logs) ИЛИ лог конкретного УТМ (transport_info.log). */
+  function activeLogs() { return state.utmLogService ? state.utmLog : state.logs; }
   function logsFiltered() {
-    return (state.logs || [])
+    return (activeLogs() || [])
       .filter(function (l) { return !state.logsFilterLevel || l.level === state.logsFilterLevel; })
       .filter(function (l) { return !state.logsSearch || (l.msg || '').toLowerCase().indexOf(state.logsSearch.toLowerCase()) !== -1; });
   }
@@ -958,7 +973,7 @@
       warn: { label: 'ВНИМАНИЕ', color: c.warn, bg: c.warnBg },
       error: { label: 'ОШИБКА', color: c.error, bg: c.errorBg },
     };
-    if (state.logs === null) return '<div style="padding:16px 12px;background:' + c.cardBg + ';font:12.5px system-ui,sans-serif;color:' + c.textTertiary + ';">Загрузка…</div>';
+    if (activeLogs() === null) return '<div style="padding:16px 12px;background:' + c.cardBg + ';font:12.5px system-ui,sans-serif;color:' + c.textTertiary + ';">Загрузка…</div>';
     var rows = logsFiltered().map(function (l) {
       var m = levelMeta[l.level] || levelMeta.info;
       return '<div style="display:flex;align-items:baseline;gap:10px;padding:9px 12px;background:' + c.cardBg + ';flex-wrap:wrap;">' +
@@ -975,6 +990,20 @@
       .then(function (r) { return r.json(); })
       .then(function (d) { state.logs = d.lines || []; if (state.screen === 'logs') render(); })
       .catch(function () { state.logs = []; if (state.screen === 'logs') render(); });
+  }
+
+  /* Загрузка лога конкретного УТМ (его transport_info.log). Уровни приводим к нижнему
+     регистру — фильтр/раскраска ожидают info/warn/error. */
+  function loadUtmLog(service) {
+    fetch('/api/utm/log?service=' + encodeURIComponent(service) + '&limit=400', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        state.utmLog = (d.lines || []).map(function (l) {
+          return { t: l.t, level: String(l.level || '').toLowerCase(), msg: l.msg };
+        });
+        if (state.screen === 'logs') render();
+      })
+      .catch(function () { state.utmLog = []; if (state.screen === 'logs') render(); });
   }
 
   // Статус сети (управляем ли роутером по UPnP, внешний IP, CGNAT). Первый вызов
@@ -1113,10 +1142,15 @@
     var lvlSelect = '<select data-action="onLogsLevel" style="background:' + c.cardBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:8px 12px;border-radius:8px;font:12.5px system-ui,sans-serif;">' +
       lvlOpt('', 'Все уровни') + lvlOpt('info', 'Инфо') + lvlOpt('warn', 'Внимание') + lvlOpt('error', 'Ошибка') + '</select>';
 
+    var isUtm = !!state.utmLogService;
+    var srcLine = isUtm
+      ? 'Лог УТМ «' + esc(state.utmLogName || state.utmLogService) + '» (transport_info.log) · <span data-action="goLogs" style="cursor:pointer;text-decoration:underline;color:' + c.brand + ';">← лог оркестратора</span>'
+      : 'Журнал оркестратора: подъём, перезапуск и лечение УТМ.';
+
     return '<div style="display:flex;flex-direction:column;gap:14px;">' +
-      '<div style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';">Журнал оркестратора: подъём, перезапуск и лечение УТМ.</div>' +
+      '<div style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';">' + srcLine + '</div>' +
       '<div style="display:flex;gap:10px;flex-wrap:wrap;">' + lvlSelect +
-        '<input data-input="onLogsSearch" placeholder="Поиск (например, порт 8082 или Transport3)" value="' + esc(state.logsSearch) + '" style="flex:1;min-width:160px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:8px 12px;border-radius:8px;font:12.5px system-ui,sans-serif;"/>' +
+        '<input data-input="onLogsSearch" placeholder="' + (isUtm ? 'Поиск по логу УТМ' : 'Поиск (например, порт 8082 или Transport3)') + '" value="' + esc(state.logsSearch) + '" style="flex:1;min-width:160px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:8px 12px;border-radius:8px;font:12.5px system-ui,sans-serif;"/>' +
         '<button data-action="refreshLogs" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Обновить</button>' +
       '</div>' +
       '<div id="logs-list" style="display:flex;flex-direction:column;gap:1px;background:' + c.border + ';border:1px solid ' + c.border + ';border-radius:10px;overflow:hidden;">' + logsListHTML(c) + '</div>' +
@@ -1374,8 +1408,11 @@
     goTokens: function () { setScreen('tokens'); },
     goUpdates: function () { setScreen('updates'); loadUpdateInfo(); },
     checkUpdatesAgain: function () { loadUpdateInfo(); },
-    goLogs: function () { setScreen('logs'); loadLogs(); },
-    refreshLogs: function () { state.logs = null; render(); loadLogs(); },
+    goLogs: function () { setState({ screen: 'logs', utmLogService: null, logsSearch: '', mobileNavOpen: false, notifOpen: false }); loadLogs(); },
+    refreshLogs: function () {
+      if (state.utmLogService) { state.utmLog = null; render(); loadUtmLog(state.utmLogService); }
+      else { state.logs = null; render(); loadLogs(); }
+    },
     goSettings: function () { setScreen('settings'); if (!state.settingsLoaded) loadSettings(); },
     goInstall: function () { setState({ screen: 'install', mobileNavOpen: false, notifOpen: false }); load2Utm(); },
 
@@ -1398,7 +1435,12 @@
           .catch(function () { showToast('Не удалось запустить экспорт'); });
       });
     },
-    openLogsFor: function (el) { setState({ screen: 'logs', logsSearch: String(el.getAttribute('data-port') || ''), mobileNavOpen: false, notifOpen: false }); loadLogs(); },
+    openLogsFor: function (el) {
+      var service = el.getAttribute('data-service');
+      var name = el.getAttribute('data-name') || service;
+      setState({ screen: 'logs', utmLogService: service, utmLogName: name, utmLog: null, logsSearch: '', logsFilterLevel: '', mobileNavOpen: false, notifOpen: false });
+      loadUtmLog(service);
+    },
     openUtmWeb: function (el) {
       var port = el.getAttribute('data-port');
       if (port) window.open('http://localhost:' + port + '/', '_blank');
