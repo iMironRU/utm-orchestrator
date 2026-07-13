@@ -21,6 +21,13 @@
     });
   }
 
+  /* Секунды → «45с» или «1:20» (для прогноза подъёма). */
+  function fmtSecs(s) {
+    s = Math.max(0, Math.round(s));
+    if (s < 60) return s + 'с';
+    return Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2);
+  }
+
   /* ====================== СОСТОЯНИЕ ПРИЛОЖЕНИЯ ====================== */
   var state = {
     theme: 'dark',                 // 'dark' | 'light' — единый глобальный источник
@@ -452,6 +459,18 @@
     var heroBg = heroOk ? c.okBg : (problem.status === 'error' ? c.errorBg : c.warnBg);
     var heroSubtitle = heroOk ? 'Все УТМ в порядке' : ('1 ' + (problem.status === 'error' ? 'сбой' : 'предупреждение') + ' требует внимания');
     var canFilter = !heroOk;
+
+    // Во время подъёма (bringUp) — НЕ «требует внимания» и не «всё в порядке», а
+    // честный прогресс с прогнозом. Это ход операции, а не проблема.
+    var liveD = state.liveStatus;
+    if (liveD && liveD.bringUp) {
+      var bt = liveD.boot || {};
+      var etaTxt = (bt.etaRemainingSeconds != null && bt.etaRemainingSeconds > 0)
+        ? ' · готово через ~' + fmtSecs(bt.etaRemainingSeconds) : '';
+      heroColor = c.progress; heroBg = c.progressBg;
+      heroSubtitle = 'идёт подъём — поднято ' + okCount + ' из ' + total + etaTxt;
+      canFilter = false;
+    }
     var filterActive = state.overviewFilter === 'problem';
     var shown = filterActive ? views.filter(function (u) { return u.status === 'error' || u.status === 'warn'; }) : views;
 
