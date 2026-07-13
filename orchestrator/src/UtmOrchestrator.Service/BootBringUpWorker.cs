@@ -89,7 +89,7 @@ public sealed class BootBringUpWorker : BackgroundService
             try
             {
                 var result = BootBringUp.ApplyIntroduce(targets, Log,
-                    onProgress: (ready, total, phase, justReady) => BootProgress.Update(phase, justReady));
+                    onProgress: (ready, total, phase, nowStarting, justReady) => BootProgress.Update(phase, nowStarting, justReady));
                 Log($"итог: поднято {result.Started.Count}, ошибок {result.Failed.Count}, успех={result.Success}");
                 // Записываем длительность только успешного полного подъёма — иначе прогноз поедет.
                 if (result.Success)

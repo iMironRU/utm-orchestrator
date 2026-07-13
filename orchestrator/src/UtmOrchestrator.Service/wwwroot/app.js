@@ -147,6 +147,9 @@
     if (inst.verdict === 'Ok') return 'ok';
     if (inst.verdict === 'Faulty') return 'error';
     if (inst.verdict === 'Stopped') return 'stopped';
+    // Во время подъёма: «запускается сейчас» и «в очереди» — это ход операции, не сбой
+    // (различие несёт подпись inst.reason: «Запускается…» / «В очереди»).
+    if (inst.verdict === 'Starting' || inst.verdict === 'Queued') return 'progress';
     // verdict Unknown / прочее — различаем по state
     if (inst.state === 'StartPending' || inst.state === 'StopPending') return 'progress';
     return 'warn'; // NotInstalled / Other / Unknown → «Внимание»

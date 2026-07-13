@@ -257,6 +257,7 @@ public sealed class MainForm : Form
             {
                 RowKind.Ok => Color.FromArgb(46, 130, 70),
                 RowKind.Starting => Color.FromArgb(70, 110, 210),
+                RowKind.Queued => Color.FromArgb(130, 130, 140),  // ждёт своей очереди
                 RowKind.Fault => Color.FromArgb(190, 50, 50),
                 RowKind.Stopped => Color.Gray,
                 _ => Color.FromArgb(170, 120, 0),

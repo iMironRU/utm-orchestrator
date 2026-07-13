@@ -6,7 +6,7 @@ namespace UtmOrchestrator.Tray;
 
 public enum OverallStatus { Ok, Warn, Fault, Unknown, Starting }
 
-public enum RowKind { Ok, Starting, Fault, Stopped, Unknown }
+public enum RowKind { Ok, Starting, Queued, Fault, Stopped, Unknown }
 
 /// <summary>Строка списка УТМ для трея (уже готовая к показу, без деталей Core).</summary>
 public sealed record UtmRow(string Name, int Port, RowKind Kind, string StateText, string? Detail);
@@ -73,9 +73,15 @@ public static class StatusProvider
                        : "…";
             var brows = (dto.instances ?? new List<InstanceDto>()).Select(i =>
             {
-                bool up = string.Equals(i.verdict, "Ok", StringComparison.OrdinalIgnoreCase);
+                // Три состояния подъёма: работает / запускается сейчас / в очереди.
+                (RowKind k, string txt) = i.verdict switch
+                {
+                    "Ok" => (RowKind.Ok, "Работает"),
+                    "Starting" => (RowKind.Starting, "Запускается…"),
+                    _ => (RowKind.Queued, "В очереди"),
+                };
                 string nm = !string.IsNullOrWhiteSpace(i.title) ? i.title! : (i.service ?? "УТМ");
-                return new UtmRow(nm, i.port, up ? RowKind.Ok : RowKind.Starting, up ? "Работает" : "Запускается…", null);
+                return new UtmRow(nm, i.port, k, txt, null);
             }).ToList();
             return new StatusSnapshot(OverallStatus.Starting,
                 $"подъём {b.ready}/{b.total}{eta}", true, svc, brows);

@@ -120,15 +120,18 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
         var ready = boot.ReadyServices;
         var bootList = st.Instances.Select(i =>
         {
+            // Три состояния: поднят / поднимается сейчас / ждёт в очереди.
             bool up = ready.Contains(i.ServiceName);
+            bool now = !up && string.Equals(i.ServiceName, boot.Current, StringComparison.OrdinalIgnoreCase);
+            string verdict = up ? "Ok" : now ? "Starting" : "Queued";
             return (object)new
             {
                 service = i.ServiceName,
                 port = i.Port,
-                verdict = up ? "Ok" : "Starting",
+                verdict,
                 ok = up,
                 title = names.Get(i.TokenSerial) ?? i.ServiceName,
-                reason = up ? null : "Запускается…",
+                reason = up ? null : now ? "Запускается…" : "В очереди",
             };
         }).ToList();
         return Results.Json(new

@@ -13,10 +13,11 @@ public static class BootProgress
     private static int _etaSeconds;
     private static DateTime _startedUtc;
     private static string _phase = "";
+    private static string? _current;   // служба, которую поднимаем ПРЯМО СЕЙЧАС
     private static readonly HashSet<string> _ready = new(StringComparer.OrdinalIgnoreCase);
 
     public sealed record Snapshot(
-        bool Active, int Total, int Ready, string Phase,
+        bool Active, int Total, int Ready, string Phase, string? Current,
         int ElapsedSeconds, int? EtaRemainingSeconds, IReadOnlyCollection<string> ReadyServices);
 
     /// <summary>Начать отслеживание подъёма total УТМ с прогнозом etaSeconds (0 = неизвестно).</summary>
@@ -25,22 +26,29 @@ public static class BootProgress
         lock (_lock)
         {
             _active = true; _total = total; _etaSeconds = etaSeconds;
-            _startedUtc = DateTime.UtcNow; _phase = "подготовка…"; _ready.Clear();
+            _startedUtc = DateTime.UtcNow; _phase = "подготовка…"; _current = null; _ready.Clear();
         }
     }
 
-    public static void Update(string phase, string? readyService = null)
+    /// <param name="nowStarting">служба, которую начали поднимать сейчас (или null).</param>
+    /// <param name="justReady">служба, которая только что поднялась (или null).</param>
+    public static void Update(string phase, string? nowStarting = null, string? justReady = null)
     {
         lock (_lock)
         {
             _phase = phase;
-            if (!string.IsNullOrEmpty(readyService)) _ready.Add(readyService!);
+            if (!string.IsNullOrEmpty(nowStarting)) _current = nowStarting;
+            if (!string.IsNullOrEmpty(justReady))
+            {
+                _ready.Add(justReady!);
+                if (string.Equals(_current, justReady, StringComparison.OrdinalIgnoreCase)) _current = null;
+            }
         }
     }
 
     public static void Finish()
     {
-        lock (_lock) { _active = false; _phase = "готово"; }
+        lock (_lock) { _active = false; _phase = "готово"; _current = null; }
     }
 
     public static Snapshot Get()
@@ -49,7 +57,7 @@ public static class BootProgress
         {
             int elapsed = _active ? (int)Math.Max(0, (DateTime.UtcNow - _startedUtc).TotalSeconds) : 0;
             int? remain = _active && _etaSeconds > 0 ? Math.Max(0, _etaSeconds - elapsed) : (int?)null;
-            return new Snapshot(_active, _total, _ready.Count, _phase, elapsed, remain, _ready.ToArray());
+            return new Snapshot(_active, _total, _ready.Count, _phase, _current, elapsed, remain, _ready.ToArray());
         }
     }
 }
