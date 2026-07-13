@@ -12,10 +12,17 @@ public sealed class TrayAppContext : ApplicationContext
 {
     private readonly NotifyIcon _notify;
     private readonly System.Windows.Forms.Timer _timer;
+    private readonly System.Windows.Forms.Timer _heartbeat;
     private readonly JobPoller _jobPoller;
     private readonly Icon _ok, _error, _busyIcon, _disconnected;
     private MainForm? _form;
     private bool _busy;
+
+    // «Пульс»: последняя успешная сводка + когда получена — чтобы всегда показывать,
+    // что трей живо мониторит («обновлено N сек назад»), а не завис.
+    private string _lastSummary = "загрузка…";
+    private DateTime _lastOkUtc = DateTime.UtcNow;
+    private bool _everConnected;
 
     private const int FastPollMs = 2500;   // пока не «Ок» (загрузка/подъём/сбой)
     private const int IdlePollMs = 8000;   // в устойчивом «Ок»
@@ -48,10 +55,26 @@ public sealed class TrayAppContext : ApplicationContext
         _timer.Tick += async (_, _) => await RefreshAsync();
         _timer.Start();
 
+        // «Пульс»: раз в секунду обновляем подсказку с «обновлено N сек назад», даже
+        // между опросами — чтобы было видно, что трей живой и мониторит.
+        _heartbeat = new System.Windows.Forms.Timer { Interval = 1000 };
+        _heartbeat.Tick += (_, _) => UpdateTooltip();
+        _heartbeat.Start();
+
         // «Руки» веба: опрос интерактивных заданий (скан токенов, лечение).
         _jobPoller = new JobPoller();
 
         _ = RefreshAsync();
+    }
+
+    // Подсказка = продукт + сводка + «пульс» (сколько назад обновлялось).
+    private void UpdateTooltip()
+    {
+        int ago = (int)Math.Max(0, (DateTime.UtcNow - _lastOkUtc).TotalSeconds);
+        string beat = !_everConnected ? "подключаюсь…"
+                    : ago < 2 ? "обновлено только что"
+                    : $"обновлено {ago}с назад";
+        _notify.Text = Truncate($"{AppInfo.Title} — {_lastSummary} · {beat}", 63);
     }
 
     private async Task RefreshAsync()
@@ -74,8 +97,11 @@ public sealed class TrayAppContext : ApplicationContext
                 _ => _disconnected,
             };
 
-            // Tooltip: имя продукта с версией + краткая сводка по УТМ.
-            _notify.Text = Truncate($"{AppInfo.Title} — {snap.Summary}", 63);
+            // Свежая сводка получена — обновляем «пульс» и подсказку.
+            _lastSummary = snap.Summary;
+            _lastOkUtc = DateTime.UtcNow;
+            _everConnected = true;
+            UpdateTooltip();
 
             _form?.UpdateSnapshot(snap);
 
@@ -111,6 +137,7 @@ public sealed class TrayAppContext : ApplicationContext
     private void ExitApp()
     {
         _timer.Stop();
+        _heartbeat.Stop();
         _jobPoller.Dispose();
         _notify.Visible = false;
         _notify.Dispose();

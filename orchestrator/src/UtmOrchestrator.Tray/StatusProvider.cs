@@ -63,6 +63,24 @@ public static class StatusProvider
             return new StatusSnapshot(OverallStatus.Unknown, "нет данных", false, svc, Array.Empty<UtmRow>());
 
         bool bringUp = dto.bringUp;
+
+        // Живой прогресс подъёма (быстрый путь /api/status) — показываем «подъём N/M ·
+        // готово через ~M:SS» с отсчётом, вместо безликого «запускается…».
+        if (bringUp && dto.boot is { } b && b.active)
+        {
+            string eta = b.etaRemainingSeconds is int r && r > 0 ? $" · готово через ~{FmtDuration(r)}"
+                       : b.etaRemainingSeconds is 0 ? " · почти готово"
+                       : "…";
+            var brows = (dto.instances ?? new List<InstanceDto>()).Select(i =>
+            {
+                bool up = string.Equals(i.verdict, "Ok", StringComparison.OrdinalIgnoreCase);
+                string nm = !string.IsNullOrWhiteSpace(i.title) ? i.title! : (i.service ?? "УТМ");
+                return new UtmRow(nm, i.port, up ? RowKind.Ok : RowKind.Starting, up ? "Работает" : "Запускается…", null);
+            }).ToList();
+            return new StatusSnapshot(OverallStatus.Starting,
+                $"подъём {b.ready}/{b.total}{eta}", true, svc, brows);
+        }
+
         var rows = new List<UtmRow>();
         foreach (var i in dto.instances ?? new List<InstanceDto>())
         {
@@ -119,6 +137,12 @@ public static class StatusProvider
         return new StatusSnapshot(overall, summary, bringUp, svc, rows);
     }
 
+    private static string FmtDuration(int seconds)
+    {
+        if (seconds < 60) return $"{seconds}с";
+        return $"{seconds / 60}:{seconds % 60:00}";
+    }
+
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
     // Разбираем ровно те поля /api/status, что нужны трею.
@@ -128,7 +152,18 @@ public static class StatusProvider
         public int ok { get; set; }
         public int faulty { get; set; }
         public bool bringUp { get; set; }
+        public BootDto? boot { get; set; }
         public List<InstanceDto>? instances { get; set; }
+    }
+
+    private sealed class BootDto
+    {
+        public bool active { get; set; }
+        public int ready { get; set; }
+        public int total { get; set; }
+        public string? phase { get; set; }
+        public int elapsedSeconds { get; set; }
+        public int? etaRemainingSeconds { get; set; }
     }
 
     private sealed class InstanceDto

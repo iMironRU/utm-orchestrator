@@ -164,8 +164,11 @@ public static class BootBringUp
     /// сверяем ФСРАР) → forget его ридер (его токен держит запущенный УТМ) → следующий.
     /// Так каждая служба при старте видит ровно один ридер = свой токен.
     /// </summary>
+    /// <param name="onProgress">Колбэк живого прогресса: (поднято, всего, фаза,
+    /// только что поднятая служба|null). Для быстрого статуса панели/трея во время подъёма.</param>
     [SupportedOSPlatform("windows")]
-    public static Result ApplyIntroduce(IReadOnlyList<Target> targets, Action<string> log, bool dryRun = false)
+    public static Result ApplyIntroduce(IReadOnlyList<Target> targets, Action<string> log, bool dryRun = false,
+        Action<int, int, string, string?>? onProgress = null)
     {
         var started = new List<string>();
         var failed = new List<string>();
@@ -219,6 +222,7 @@ public static class BootBringUp
         // 2. По одному: introduce → старт → forget.
         foreach (var t in order)
         {
+            onProgress?.Invoke(started.Count, order.Count, $"поднимаю {t.Service}…", null);
             int rvI = rt.IntroduceReader(t.ReaderName!, t.ReaderName!);
             var present = rt.ListReaders();
             log($"→ {t.Service}: introduce '{t.ReaderName}' rv=0x{rvI:X8}; ридеров сейчас: {present.Count} [{string.Join(", ", present)}]");
@@ -229,6 +233,7 @@ public static class BootBringUp
             bool up = run && WaitHttp(http, t.Port, TimeSpan.FromSeconds(90), t.Fsrar, log);
             if (up) { started.Add(t.Service); log($"  ✓ {t.Service} готов, ФСРАР сошёлся"); }
             else { failed.Add(t.Service); log($"  ✗ {t.Service} НЕ поднялся / ФСРАР не тот"); }
+            onProgress?.Invoke(started.Count, order.Count, up ? $"{t.Service} поднят" : $"{t.Service} не поднялся", up ? t.Service : null);
 
             int rvF = rt.ForgetReader(t.ReaderName!);
             log($"  forget '{t.ReaderName}' rv=0x{rvF:X8}");

@@ -77,18 +77,32 @@ public sealed class BootBringUpWorker : BackgroundService
 
         // Синхронный introduce-подъём (PC/SC introduce из конфига, без рестарта
         // SCardSvr) — в отдельном потоке, чтобы не блокировать хост/панель.
+        int withReader = targets.Count(t => !string.IsNullOrEmpty(t.ReaderName));
+        int eta = BootHistory.MedianSeconds();
+        Log($"прогноз подъёма: {(eta > 0 ? eta + "с (по истории)" : "нет истории")}, УТМ к подъёму: {withReader}");
+
         await Task.Run(() =>
         {
             using var _ = BringUpStatus.Begin(); // панель/трей покажут «Запускается…», не «Сбой»
+            BootProgress.Start(withReader, eta);
+            var swStart = DateTime.UtcNow;
             try
             {
-                var result = BootBringUp.ApplyIntroduce(targets, Log);
+                var result = BootBringUp.ApplyIntroduce(targets, Log,
+                    onProgress: (ready, total, phase, justReady) => BootProgress.Update(phase, justReady));
                 Log($"итог: поднято {result.Started.Count}, ошибок {result.Failed.Count}, успех={result.Success}");
+                // Записываем длительность только успешного полного подъёма — иначе прогноз поедет.
+                if (result.Success)
+                    BootHistory.Record((int)(DateTime.UtcNow - swStart).TotalSeconds);
             }
             catch (Exception e)
             {
                 _log.LogError(e, "Сбой авто-подъёма УТМ.");
                 try { File.AppendAllText(logPath, $"{DateTime.Now:HH:mm:ss} [svc] СБОЙ: {e}{Environment.NewLine}"); } catch { }
+            }
+            finally
+            {
+                BootProgress.Finish();
             }
         }, stoppingToken);
     }

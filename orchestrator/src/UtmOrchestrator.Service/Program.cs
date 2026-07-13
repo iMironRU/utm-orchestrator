@@ -109,6 +109,48 @@ app.MapPost("/api/auth/logout", (HttpContext ctx) =>
 // --- API статуса (read-only) ---
 app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCache orgCache, CancellationToken ct) =>
 {
+    // БЫСТРЫЙ ПУТЬ во время подъёма: не ходим по HTTP к ещё не поднятым УТМ (это заняло
+    // бы десятки секунд и панель/трей «висели» бы). Отдаём живой прогресс из BootProgress:
+    // кого уже подняли — Ok, остальные — «Запускается…», + фаза и прогноз (ETA).
+    var boot = BootProgress.Get();
+    if (BringUpStatus.Active && boot.Active)
+    {
+        var st = UtmOrchestrator.Core.State.OrchestratorState.Load(
+            UtmOrchestrator.Core.State.OrchestratorState.DefaultPath);
+        var ready = boot.ReadyServices;
+        var bootList = st.Instances.Select(i =>
+        {
+            bool up = ready.Contains(i.ServiceName);
+            return (object)new
+            {
+                service = i.ServiceName,
+                port = i.Port,
+                verdict = up ? "Ok" : "Starting",
+                ok = up,
+                title = names.Get(i.TokenSerial) ?? i.ServiceName,
+                reason = up ? null : "Запускается…",
+            };
+        }).ToList();
+        return Results.Json(new
+        {
+            total = st.Instances.Count,
+            ok = boot.Ready,
+            faulty = 0,
+            bringUp = true,
+            boot = new
+            {
+                active = true,
+                ready = boot.Ready,
+                total = boot.Total,
+                phase = boot.Phase,
+                elapsedSeconds = boot.ElapsedSeconds,
+                etaRemainingSeconds = boot.EtaRemainingSeconds,
+            },
+            orchestratorVersion = UtmOrchestrator.Core.AppInfo.Version,
+            instances = bootList,
+        });
+    }
+
     // scanTokens: false — НЕ трогаем PKCS11 на живых токенах (иначе драйвер роняет
     // процесс). Серийники берём из кэша SerialCache.
     var instances = await UtmDiscovery.DiscoverAsync(ct, scanTokens: false, serials);
