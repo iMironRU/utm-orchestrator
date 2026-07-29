@@ -816,15 +816,24 @@ app.MapPost("/api/utm/add", (AddUtmRequest req, SerialCache serials) =>
     if (!ReaderOp.Gate.Wait(0))
         return Results.Conflict(new { error = "уже идёт операция с ридерами — попробуйте позже" });
 
-    var allReaders = state.Instances.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
-
     _ = Task.Run(() =>
     {
         using var _ = BringUpStatus.Begin();
         try
         {
+            // «existing» — для расчёта портов/имён и как источник клон-шаблона. Берём НЕ
+            // только из state.json, но и из физически стоящих УТМ (обнаружение): если
+            // state.json пуст, но на диске есть C:\UTM — сможем клонировать из него.
+            var discovered = UtmDiscovery.DiscoverAsync(default, scanTokens: false, serials)
+                .GetAwaiter().GetResult();
+            var existing = state.Instances
+                .Concat(discovered.Where(d => !state.Instances.Any(s =>
+                    string.Equals(s.ServiceName, d.ServiceName, StringComparison.OrdinalIgnoreCase))))
+                .ToList();
+            var allReaders = existing.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
+
             var r = UtmOrchestrator.Core.Install.UtmInstaller.AddNew(
-                req.Serial!, req.Fsrar, req.Reader!, state.Instances, allReaders, req.Port, ReaderOp.FileLog);
+                req.Serial!, req.Fsrar, req.Reader!, existing, allReaders, req.Port, ReaderOp.FileLog);
             if (r.Success && r.Instance is not null)
             {
                 var st = OrchestratorState.Load(OrchestratorState.DefaultPath);

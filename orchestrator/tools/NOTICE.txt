@@ -1,0 +1,8 @@
+innoextract.exe — сторонняя утилита для распаковки инсталляторов Inno Setup.
+Проект: https://constexpr.org/innoextract/  (https://github.com/dscharrer/innoextract)
+Лицензия: zlib/libpng (см. https://github.com/dscharrer/innoextract/blob/master/LICENSE)
+Версия: 1.9
+
+Используется оркестратором как отдельный процесс (не линкуется) для распаковки
+официального дистрибутива УТМ (Inno Setup) при установке первого УТМ на чистую машину.
+Бинарник поставляется как есть, без изменений.

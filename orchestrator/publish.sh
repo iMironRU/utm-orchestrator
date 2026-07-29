@@ -62,6 +62,12 @@ done
 # Скрипты установки/обновления — в app
 cp install.ps1 uninstall.ps1 update.ps1 "$APP/" 2>/dev/null || true
 
+# Бандл innoextract (для распаковки офиц. дистрибутива УТМ на чистой машине).
+if [ -d tools ]; then
+  mkdir -p "$APP/tools"
+  cp -r tools/. "$APP/tools/"
+fi
+
 # Ключ рантайма = хэш списка файлов рантайма (путь:размер). Меняется только при
 # смене состава/версии рантайма. Кладём и в app (runtime.key — что требуется), и в dist.
 KEY=$( ( cd "$RT" && find . -type f -printf '%P:%s\n' | LC_ALL=C sort | sha256sum ) | cut -c1-12 )
