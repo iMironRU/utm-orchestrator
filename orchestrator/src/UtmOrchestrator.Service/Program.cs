@@ -242,6 +242,8 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
         faulty = health.Count - ok,
         bringUp = BringUpStatus.Active, // идёт подъём/перепривязка — «не отвечает» это норма
         orchestratorVersion = UtmOrchestrator.Core.AppInfo.Version,
+        machine = Environment.MachineName,   // на какой машине работает панель
+        lanIp = OperatingSystem.IsWindows() ? UtmOrchestrator.Core.Network.UpnpManager.LanIp() : null,
         instances = list,
     });
 });

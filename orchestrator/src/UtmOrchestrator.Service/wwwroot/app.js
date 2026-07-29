@@ -289,11 +289,17 @@
       '<span style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';">' + txt + '</span></div>';
   }
 
-  // Версия оркестратора — всегда видно (не только на экране «Обновления»).
+  // Версия оркестратора + на какой машине работает панель — всегда видно.
   function orchVersionLine(c) {
     var d = state.liveStatus;
     var v = (d && d.orchestratorVersion) ? d.orchestratorVersion : '—';
-    return '<div data-action="goUpdates" title="Открыть обновления" style="padding:4px 12px 2px;font:11px system-ui,sans-serif;color:' + c.textTertiary + ';cursor:pointer;">Оркестратор v' + esc(v) + '</div>';
+    var machine = (d && d.machine) ? d.machine : '';
+    var ip = (d && d.lanIp) ? d.lanIp : '';
+    var host = (machine || ip)
+      ? '<div title="Компьютер, на котором работает эта панель" style="padding:2px 12px 0;font:11px system-ui,sans-serif;color:' + c.textTertiary + ';">Этот ПК: ' + esc(machine) + (ip ? ' · ' + esc(ip) : '') + '</div>'
+      : '';
+    return host +
+      '<div data-action="goUpdates" title="Открыть обновления" style="padding:2px 12px 2px;font:11px system-ui,sans-serif;color:' + c.textTertiary + ';cursor:pointer;">Оркестратор v' + esc(v) + '</div>';
   }
 
   function sidebar(c) {
@@ -1186,6 +1192,7 @@
       '<div style="display:flex;gap:10px;flex-wrap:wrap;">' + lvlSelect +
         '<input data-input="onLogsSearch" placeholder="' + (isUtm ? 'Поиск по логу УТМ' : 'Поиск (например, порт 8082 или Transport3)') + '" value="' + esc(state.logsSearch) + '" style="flex:1;min-width:160px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:8px 12px;border-radius:8px;font:12.5px system-ui,sans-serif;"/>' +
         '<button data-action="refreshLogs" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Обновить</button>' +
+        '<button data-action="downloadLogs" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Сохранить в файл</button>' +
       '</div>' +
       '<div id="logs-list" style="display:flex;flex-direction:column;gap:1px;background:' + c.border + ';border:1px solid ' + c.border + ';border-radius:10px;overflow:hidden;">' + logsListHTML(c) + '</div>' +
     '</div>';
@@ -1446,6 +1453,24 @@
     refreshLogs: function () {
       if (state.utmLogService) { state.utmLog = null; render(); loadUtmLog(state.utmLogService); }
       else { state.logs = null; render(); loadLogs(); }
+    },
+    /* Сохранить показанный лог (с учётом фильтра/поиска) в файл — для отправки в поддержку. */
+    downloadLogs: function () {
+      var rows = logsFiltered();
+      if (!rows || !rows.length) { showToast('Логи пусты — нечего сохранять'); return; }
+      var machine = (state.liveStatus && state.liveStatus.machine) ? state.liveStatus.machine : 'utmo';
+      var name = (state.utmLogService ? ('utm-' + state.utmLogService) : ('orchestrator-' + machine)) + '.log';
+      var text = rows.map(function (l) {
+        return (l.t || '') + '  ' + (l.level || '').toUpperCase() + '  ' + (l.msg || '');
+      }).join('\r\n');
+      try {
+        var blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+        showToast('Сохранено: ' + name);
+      } catch (e) { showToast('Не удалось сохранить файл'); }
     },
     goSettings: function () { setScreen('settings'); if (!state.settingsLoaded) loadSettings(); },
     goInstall: function () { setState({ screen: 'install', mobileNavOpen: false, notifOpen: false }); load2Utm(); },
