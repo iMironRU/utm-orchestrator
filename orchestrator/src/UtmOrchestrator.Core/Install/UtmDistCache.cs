@@ -29,9 +29,15 @@ public static class UtmDistCache
     /// без JRE служба Transport не стартует. Проверяем оба, чтобы отвергнуть неполную
     /// распаковку (иначе развернём УТМ, который не поднимается).
     /// </summary>
-    public static bool IsValid(string dir) =>
-        File.Exists(Path.Combine(dir, "transporter", "bin", "utm.exe"))
-        && File.Exists(Path.Combine(dir, "jre", "bin", "client", "jvm.dll"));
+    public static bool IsValid(string dir)
+    {
+        string lib = Path.Combine(dir, "transporter", "lib");
+        return File.Exists(Path.Combine(dir, "transporter", "bin", "utm.exe"))
+            && File.Exists(Path.Combine(dir, "jre", "bin", "client", "jvm.dll"))
+            // Библиотека (classpath) должна быть непустой — иначе NoClassDefFoundError.
+            && Directory.Exists(lib)
+            && Directory.EnumerateFiles(lib, "*.jar").Any();
+    }
 
     /// <summary>
     /// Гарантирует наличие чистого шаблона и возвращает путь к нему. existingUtmFolder —
@@ -199,12 +205,18 @@ public static class UtmDistCache
     }
 
     // Данные экземпляра (не софт) — не переносим в чистый шаблон.
+    // ВНИМАНИЕ: точное совпадение папки или её содержимого (с завершающим '\'), иначе
+    // "transporter\l" по StartsWith задевал бы "transporter\LIB" — и выкидывал все jar-ы
+    // библиотеки (classpath пустел → NoClassDefFoundError, УТМ не стартовал).
+    private static readonly string[] DataDirs =
+        { @"transporter\transportdb", @"transporter\l", @"agent\l" };
+
     private static bool IsData(string rel)
     {
-        string r = rel.Replace('/', '\\').ToLowerInvariant();
-        return r.StartsWith(@"transporter\transportdb")
-            || r.StartsWith(@"transporter\l")           // логи
-            || r.StartsWith(@"agent\l");
+        string r = rel.Replace('/', '\\').ToLowerInvariant().TrimEnd('\\');
+        foreach (var d in DataDirs)
+            if (r == d || r.StartsWith(d + @"\", StringComparison.Ordinal)) return true;
+        return false;
     }
 
     // Стрип на всякий случай, если что-то от экземпляра проникло.
