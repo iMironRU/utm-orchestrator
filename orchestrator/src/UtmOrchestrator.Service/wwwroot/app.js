@@ -653,6 +653,9 @@
         '<button data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Открыть УТМ ↗</button>' +
         '<button data-action="openLogsFor" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Логи УТМ</button>' +
         '<button data-action="queryUnprocessed" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Запросить необработанные накладные</button>' +
+        // «Остановить» — только для работающего/сбойного (у остановленного нечего останавливать).
+        (sel.status === 'stopped' ? '' :
+          '<button data-action="stopUtm" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="background:transparent;border:1px solid ' + c.error + ';color:' + c.error + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Остановить</button>') +
       '</div>' +
       rebindBlock +
     '</div>';
@@ -848,10 +851,23 @@
       '</div>';
     }
 
+    // Кнопка «на все токены» — если есть отсканированные непривязанные токены.
+    var batchBtn = '';
+    if (state.scannedTokens && state.scannedTokens.length) {
+      var boundS = {};
+      ((state.liveStatus && state.liveStatus.instances) || []).forEach(function (i) { if (i.serial) boundS[String(i.serial).toLowerCase()] = true; });
+      var freshCount = state.scannedTokens.filter(function (t) { return t.serial && t.reader && !boundS[String(t.serial).toLowerCase()]; }).length;
+      if (freshCount > 1) {
+        batchBtn = '<div style="padding-top:10px;margin-top:2px;border-top:1px solid ' + c.border + ';display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">' +
+          '<div style="flex:1;min-width:180px;font:12.5px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Поставить УТМ сразу на все новые токены (' + freshCount + '). Пойдёт по одному; первый скачает дистрибутив, дальше из кэша.</div>' +
+          '<button data-action="addAllUtm" style="background:' + c.brand + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Установить на все токены (' + freshCount + ')</button></div>';
+      }
+    }
+
     var scanCard = '<div style="display:flex;flex-direction:column;gap:12px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
       '<div style="font:700 14px system-ui,sans-serif;color:' + c.textPrimary + ';">Обследование: токены на компьютере</div>' +
       '<div style="font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Читаются через приложение в трее (интерактивно). Работает, когда панель открыта с самого компьютера и трей запущен.</div>' +
-      '<div>' + scanBtn + '</div>' + scanResult + adoptSection +
+      '<div>' + scanBtn + '</div>' + scanResult + batchBtn + adoptSection +
     '</div>';
 
     return '<div style="display:flex;flex-direction:column;gap:16px;">' +
@@ -1529,8 +1545,41 @@
       });
     },
 
-    /* деталь УТМ */
-    stopUtm: function () { notReady('Остановка УТМ'); },
+    /* деталь УТМ: остановить УТМ (обмен с ЕГАИС прекратится). */
+    stopUtm: function (el) {
+      var service = el.getAttribute('data-service');
+      var name = el.getAttribute('data-name') || service;
+      askConfirm({ title: 'Остановить УТМ', okLabel: 'Остановить', danger: true,
+        message: 'Остановить «' + name + '»?\nОбмен с ЕГАИС для этой организации прекратится, пока не запустите снова.' }, function () {
+        showToast('Останавливаю «' + name + '»…');
+        fetch('/api/utm/stop', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: service }),
+        }).then(function (r) {
+          if (!r.ok) throw new Error();
+          showToast('УТМ остановлен — статус обновится автоматически'); pollStatus(true);
+        }).catch(function () { showToast('Не удалось остановить'); });
+      });
+    },
+    /* Установить УТМ на ВСЕ непривязанные токены разом. */
+    addAllUtm: function () {
+      var toks = (state.scannedTokens || []).filter(function (t) { return t.serial && t.reader; });
+      var bound = {};
+      ((state.liveStatus && state.liveStatus.instances) || []).forEach(function (i) { if (i.serial) bound[String(i.serial).toLowerCase()] = true; });
+      var fresh = toks.filter(function (t) { return !bound[String(t.serial).toLowerCase()]; });
+      if (!fresh.length) { showToast('Нет новых токенов для установки'); return; }
+      askConfirm({ title: 'Установить на все токены', okLabel: 'Установить (' + fresh.length + ')',
+        message: 'Установить УТМ на все ' + fresh.length + ' токен(ов) разом?\nПервый скачает дистрибутив (~151 МБ, ~3-5 мин), дальше из кэша. Пойдёт по одному, статус — в панели и логах.' }, function () {
+        showToast('Устанавливаю УТМ на ' + fresh.length + ' токен(ов)…');
+        fetch('/api/utm/add-all', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tokens: fresh.map(function (t) { return { serial: t.serial, fsrar: t.fsrar || '', reader: t.reader }; }) }),
+        }).then(function (r) {
+          if (r.status === 409) { showToast('Уже идёт операция — подождите'); return; }
+          if (!r.ok) throw new Error();
+          showToast('Установка запущена — УТМ появятся по мере готовности');
+        }).catch(function () { showToast('Не удалось запустить установку'); });
+      });
+    },
     /* Запросить у ЕГАИС все необработанные накладные (ТТН без акта) для одного УТМ. */
     queryUnprocessed: function (el) {
       var service = el.getAttribute('data-service');

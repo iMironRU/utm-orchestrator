@@ -374,6 +374,26 @@ app.MapPost("/api/utm/restart", (RestartRequest req) =>
     return Results.Accepted(value: new { ok = true, started = req.Service });
 });
 
+// --- Остановить УТМ (служба). Обмен с ЕГАИС для этой организации прекратится. ---
+app.MapPost("/api/utm/stop", (RestartRequest req) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Service)) return Results.BadRequest(new { error = "service обязателен" });
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    if (UtmOrchestrator.Core.Services.ServiceControl.GetState(req.Service) == UtmOrchestrator.Core.Services.ServiceState.NotInstalled)
+        return Results.NotFound(new { error = $"служба {req.Service} не найдена" });
+
+    _ = Task.Run(() =>
+    {
+        try
+        {
+            UtmOrchestrator.Core.Services.ServiceControl.Stop(req.Service, TimeSpan.FromSeconds(60));
+            ReaderOp.FileLog($"stop {req.Service}: остановлен по команде из панели");
+        }
+        catch (Exception e) { ReaderOp.FileLog($"stop {req.Service}: СБОЙ — {e}"); }
+    });
+    return Results.Accepted(value: new { ok = true, stopped = req.Service });
+});
+
 // --- Файрвол: открыть/закрыть порт УТМ (наше правило; служба = LocalSystem = админ) ---
 app.MapPost("/api/utm/firewall", (FirewallRequest req) =>
 {
@@ -850,6 +870,59 @@ app.MapPost("/api/utm/add", (AddUtmRequest req, SerialCache serials) =>
     return Results.Accepted(value: new { ok = true, serial = req.Serial });
 });
 
+// --- Установить УТМ на ВСЕ переданные токены разом (последовательно, под общим замком) ---
+// Шаблон качается один раз (первый УТМ), дальше из кэша. Уже привязанные токены пропускаем.
+app.MapPost("/api/utm/add-all", (AddAllRequest req, SerialCache serials) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    var tokens = (req.Tokens ?? new())
+        .Where(t => !string.IsNullOrWhiteSpace(t.Serial) && !string.IsNullOrWhiteSpace(t.Reader))
+        .ToList();
+    if (tokens.Count == 0) return Results.BadRequest(new { error = "нет токенов с serial и reader" });
+
+    if (!ReaderOp.Gate.Wait(0))
+        return Results.Conflict(new { error = "уже идёт операция с ридерами — попробуйте позже" });
+
+    _ = Task.Run(() =>
+    {
+        using var _ = BringUpStatus.Begin();
+        int done = 0, skipped = 0, failed = 0;
+        try
+        {
+            foreach (var tk in tokens)
+            {
+                var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+                if (state.Instances.Any(i => string.Equals(i.TokenSerial, tk.Serial, StringComparison.OrdinalIgnoreCase)))
+                { skipped++; ReaderOp.FileLog($"add-all: {tk.Serial} уже привязан — пропуск"); continue; }
+
+                var discovered = UtmDiscovery.DiscoverAsync(default, scanTokens: false, serials).GetAwaiter().GetResult();
+                var existing = state.Instances
+                    .Concat(discovered.Where(d => !state.Instances.Any(s =>
+                        string.Equals(s.ServiceName, d.ServiceName, StringComparison.OrdinalIgnoreCase))))
+                    .ToList();
+                var allReaders = existing.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
+
+                ReaderOp.FileLog($"add-all: устанавливаю УТМ на {tk.Serial} (ридер {tk.Reader})");
+                var r = UtmOrchestrator.Core.Install.UtmInstaller.AddNew(
+                    tk.Serial!, tk.Fsrar, tk.Reader!, existing, allReaders, null, ReaderOp.FileLog);
+                if (r.Success && r.Instance is not null)
+                {
+                    var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+                    st.Instances.Add(r.Instance);
+                    st.Save(OrchestratorState.DefaultPath);
+                    if (!string.IsNullOrEmpty(tk.Fsrar)) serials.Learn(tk.Fsrar!, tk.Serial!);
+                    done++; ReaderOp.FileLog($"add-all: {tk.Serial} — успех: {r.Message}");
+                }
+                else { failed++; ReaderOp.FileLog($"add-all: {tk.Serial} — НЕ УДАЛОСЬ: {r.Message}"); }
+            }
+            ReaderOp.FileLog($"add-all: готово — поставлено {done}, пропущено {skipped}, ошибок {failed}");
+        }
+        catch (Exception e) { ReaderOp.FileLog($"add-all: СБОЙ — {e}"); }
+        finally { ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true, count = tokens.Count });
+});
+
 // --- Самообновление оркестратора: статус ---
 app.MapGet("/api/update/status", async (CancellationToken ct) =>
 {
@@ -930,6 +1003,7 @@ record AdoptToken(string? Serial, string? Fsrar, string? Reader);
 record AdoptRequest(List<AdoptToken>? Tokens);
 record LoginRequest(string? Username, string? Password);
 record AddUtmRequest(string? Serial, string? Fsrar, string? Reader, int? Port);
+record AddAllRequest(List<AdoptToken>? Tokens);
 record SettingsRequest(bool RequireAuth, string? Username, bool NetworkAccess, List<string>? AllowedIps, string? NewPassword);
 
 // Кэш статуса обмена по папке УТМ: transport_info.log читаем не чаще раза в ~20с
