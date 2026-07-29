@@ -73,6 +73,31 @@ public static class UtmQueries
         }
     }
 
+    /// <summary>
+    /// Счётчики очередей УТМ: входящие (GET /opt/out — из ЕГАИС, ждут учётную систему)
+    /// и исходящие (GET /opt/in — поданы, ещё НЕ отправлены в ЕГАИС). Важно перед
+    /// остановкой/переносом: исходящие &gt; 0 = стоп нельзя (документы потеряются).
+    /// -1 = УТМ не ответил.
+    /// </summary>
+    public static async Task<(int Incoming, int Outgoing)> QueueCountsAsync(int port, CancellationToken ct = default)
+    {
+        int inc = await CountUrlsAsync($"http://127.0.0.1:{port}/opt/out", ct).ConfigureAwait(false);
+        int outg = await CountUrlsAsync($"http://127.0.0.1:{port}/opt/in", ct).ConfigureAwait(false);
+        return (inc, outg);
+    }
+
+    private static async Task<int> CountUrlsAsync(string url, CancellationToken ct)
+    {
+        try
+        {
+            string body = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
+            int n = 0, i = 0;
+            while ((i = body.IndexOf("<url", i, StringComparison.Ordinal)) >= 0) { n++; i += 4; }
+            return n;
+        }
+        catch { return -1; }
+    }
+
     private static string? TryReadReplyId(string body)
     {
         try

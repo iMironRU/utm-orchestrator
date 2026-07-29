@@ -199,6 +199,9 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
         // Реальный статус обмена (из transport_info.log), кэш ~20с — файл читаем не на
         // каждый опрос. Только если УТМ отвечает (иначе лог не про обмен, а про подъём).
         var ex = h.IsOk ? ExchangeCache.Get(h.Instance.FolderPath) : null;
+        // Счётчики очередей: входящие (/opt/out) и исходящие (/opt/in) — для «безопасно ли
+        // останавливать/переносить». -1 = не смогли спросить.
+        var q = h.IsOk ? QueueCache.Get(h.Instance.Port) : (-1, -1);
 
         list.Add(new
         {
@@ -232,6 +235,9 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
                 pendingQueries = ex.PendingQueries,
                 pendingAscp = ex.PendingAscp,
             },
+            // Очереди документов: incoming = входящие из ЕГАИС (ждут учётную систему),
+            // outgoing = исходящие (поданы, ещё не отправлены в ЕГАИС). -1 = неизвестно.
+            queue = !h.IsOk ? null : new { incoming = q.Item1, outgoing = q.Item2 },
         });
     }
 
@@ -1026,6 +1032,24 @@ static class ExchangeCache
         var ex = UtmOrchestrator.Core.Diagnostics.UtmLog.ReadExchange(folder);
         _c[folder!] = (ex, DateTime.UtcNow + Ttl);
         return ex;
+    }
+}
+
+// Кэш счётчиков очередей УТМ (входящие /opt/out, исходящие /opt/in) по порту, ~20с —
+// чтобы не бить УТМ по HTTP на каждый опрос статуса.
+static class QueueCache
+{
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<int,
+        ((int Incoming, int Outgoing) counts, DateTime exp)> _c = new();
+    private static readonly TimeSpan Ttl = TimeSpan.FromSeconds(20);
+
+    public static (int Incoming, int Outgoing) Get(int port)
+    {
+        if (port <= 0) return (-1, -1);
+        if (_c.TryGetValue(port, out var v) && v.exp > DateTime.UtcNow) return v.counts;
+        var counts = UtmOrchestrator.Core.Egais.UtmQueries.QueueCountsAsync(port).GetAwaiter().GetResult();
+        _c[port] = (counts, DateTime.UtcNow + Ttl);
+        return counts;
     }
 }
 

@@ -189,6 +189,7 @@
         externalPort: inst.externalPort || inst.port,
         firewallOpen: inst.firewallOpen === true,
         exchange: inst.exchange || null,   // реальный обмен из лога УТМ
+        queue: inst.queue || null,         // входящие/исходящие в очередях УТМ
         lastSync: 'только что',
         stoppedAt: 'остановлен',
         progressLabel: inst.reason || 'Идёт операция',
@@ -241,6 +242,7 @@
       isProgress: isProgress, hasCallout: hasCallout, hasMeta: hasMeta, hasExchange: hasExchange,
       reasonText: u.reason || '', exchangeText: exchangeText, primaryLabel: primaryLabel,
       exchange: u.exchange || null, exchangeLive: !!(u.exchange && u.exchange.live),
+      queue: u.queue || null,
       line1: line1, line2: line2,
       progressLabel: u.progressLabel || '', progress: u.progress || 0, progressTrack: c.subtleBg,
     };
@@ -548,6 +550,20 @@
           '<div style="width:6px;height:6px;border-radius:50%;background:' + exColor + ';flex-shrink:0;"></div>' +
           '<span style="font:12px system-ui,sans-serif;color:' + exTextColor + ';">' + esc(u.exchangeText) + '</span></div>'
       : '';
+    // Очереди документов: входящие (из ЕГАИС, ждут забора) и исходящие (не отправлены).
+    // Исходящие > 0 — тревожно (перед остановкой/переносом их нужно дождаться).
+    var queueLine = '';
+    if (u.hasExchange && u.queue && (u.queue.incoming >= 0 || u.queue.outgoing >= 0)) {
+      var inc = u.queue.incoming, outg = u.queue.outgoing;
+      var outWarn = outg > 0;
+      queueLine = '<div style="display:flex;align-items:center;gap:6px;">' +
+        '<div style="width:6px;height:6px;border-radius:50%;background:' + (outWarn ? c.warn : c.textTertiary) + ';flex-shrink:0;"></div>' +
+        '<span style="font:12px system-ui,sans-serif;color:' + (outWarn ? c.warn : c.textSecondary) + ';">' +
+          'Входящих: ' + (inc < 0 ? '—' : inc) + ' · исходящих: ' + (outg < 0 ? '—' : outg) +
+          (outWarn ? ' (не отправлены в ЕГАИС!)' : '') +
+        '</span></div>';
+    }
+    exchange = exchange + queueLine;
     // Вся плитка кликабельна → карточка УТМ. Внутренние ссылки перехватывают клик
     // сами (делегирование берёт ближайший [data-action]), так что они остаются рабочими.
     return '<div data-action="openUtm" data-id="' + esc(u.id) + '" title="Открыть карточку УТМ" style="min-width:0;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:10px;padding:18px 18px 14px;display:flex;flex-direction:column;gap:12px;cursor:pointer;">' +
@@ -1574,8 +1590,13 @@
     stopUtm: function (el) {
       var service = el.getAttribute('data-service');
       var name = el.getAttribute('data-name') || service;
+      var sel = selectedUtm();
+      var outg = (sel && sel.queue) ? sel.queue.outgoing : -1;
+      var warn = outg > 0
+        ? '\n\n⚠ В очереди ' + outg + ' исходящих — они ещё НЕ отправлены в ЕГАИС и при остановке/переносе потеряются. Лучше дождаться, пока обмен их отправит (станет 0).'
+        : '';
       askConfirm({ title: 'Остановить УТМ', okLabel: 'Остановить', danger: true,
-        message: 'Остановить «' + name + '»?\nОбмен с ЕГАИС для этой организации прекратится, пока не запустите снова.' }, function () {
+        message: 'Остановить «' + name + '»?\nОбмен с ЕГАИС для этой организации прекратится, пока не запустите снова.' + warn }, function () {
         showToast('Останавливаю «' + name + '»…');
         fetch('/api/utm/stop', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: service }),
