@@ -164,10 +164,16 @@ public static class UtmDistCache
             RedirectStandardOutput = true, RedirectStandardError = true,
         };
         using var p = Process.Start(psi)!;
-        p.StandardOutput.ReadToEnd();
+        string outp = p.StandardOutput.ReadToEnd();
         string err = p.StandardError.ReadToEnd();
         p.WaitForExit(300_000);
-        if (!string.IsNullOrWhiteSpace(err)) log("innoextract: " + err.Trim());
+        // Логируем и stdout-хвост, и stderr, и код — чтобы видеть, обрывается ли распаковка.
+        var tail = outp.Replace("\r", "").Split('\n').Where(l => l.Length > 0).TakeLast(3);
+        if (tail.Any()) log("innoextract stdout: …" + string.Join(" | ", tail));
+        if (!string.IsNullOrWhiteSpace(err)) log("innoextract stderr: " + err.Trim());
+        int extracted = 0;
+        try { extracted = Directory.EnumerateFiles(Path.Combine(outDir, "app"), "*", SearchOption.AllDirectories).Count(); } catch { }
+        log($"innoextract: exit {p.ExitCode}, распаковано в app: {extracted} файлов");
         return p.ExitCode;
     }
 
