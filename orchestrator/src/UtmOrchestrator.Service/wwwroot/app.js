@@ -1506,24 +1506,27 @@
       var label = el.getAttribute('data-label');
       var service = el.getAttribute('data-service');
       var name = el.getAttribute('data-name');
-      // «Перезапустить» — реальный вызов службы (introduce, session-0-safe).
-      if (label === 'Перезапустить' && service) {
-        askConfirm({ title: 'Перезапуск УТМ', okLabel: 'Перезапустить',
-          message: 'Перезапустить «' + name + '»?\nОбмен с ЕГАИС на ~минуту прервётся.' }, function () {
-          showToast('Перезапуск «' + name + '»…');
-          fetch('/api/utm/restart', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ service: service }),
-          }).then(function (r) {
-            if (r.status === 409) { showToast('Уже идёт операция с ридерами — подождите'); return; }
-            if (!r.ok) throw new Error();
-            showToast('Перезапуск запущен — статус обновится автоматически');
-          }).catch(function () { showToast('Не удалось запустить перезапуск'); });
-        });
-        return;
-      }
-      // Прочие первичные действия (запуск/привязка) пока не реализованы — честно.
-      notReady(label);
+      if (!service) { notReady(label); return; }
+      // Один движок для всех первичных действий: introduce-подъём (/api/utm/restart,
+      // RestartOne, session-0-safe). Для остановленного стоп — no-op, дальше старт; для
+      // «Внимание» — перепривязка токена. Отличается только текст.
+      var msg = label === 'Перезапустить'
+        ? 'Перезапустить «' + name + '»?\nОбмен с ЕГАИС на ~минуту прервётся.'
+        : label === 'Запустить'
+          ? 'Запустить «' + name + '»?\nУТМ поднимется, начнётся обмен с ЕГАИС (~минута).'
+          : 'Привязать токен и поднять «' + name + '»?\nЗаймёт ~минуту.';
+      askConfirm({ title: label + ' — УТМ', okLabel: label, message: msg }, function () {
+        showToast(label + ' «' + name + '»…');
+        fetch('/api/utm/restart', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ service: service }),
+        }).then(function (r) {
+          if (r.status === 409) { showToast('Уже идёт операция с ридерами — подождите'); return; }
+          if (r.status === 400) { return r.json().then(function (d) { showToast(d.error || 'Нельзя: нет привязки токена в конфиге'); }); }
+          if (!r.ok) throw new Error();
+          showToast(label + ' запущен(а) — статус обновится автоматически');
+        }).catch(function () { showToast('Не удалось: ' + label.toLowerCase()); });
+      });
     },
 
     /* деталь УТМ */
