@@ -24,6 +24,10 @@ builder.Services.AddSingleton<UtmOrchestrator.Service.Jobs.JobStore>();
 string url = builder.Configuration.GetValue<string?>("PanelUrl", null) ?? "http://0.0.0.0:8090";
 builder.WebHost.UseUrls(url);
 
+// Лимит числа УТМ на одну машину (по числу токенов/ридеров). Настраивается в
+// appsettings (MaxUtms), по умолчанию 10. Показываем в панели и не даём превысить.
+int maxUtms = builder.Configuration.GetValue("MaxUtms", 10);
+
 var app = builder.Build();
 
 // --- Доступ: IP-allowlist + серверная авторизация (когда включены) ---
@@ -150,6 +154,7 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
                 etaRemainingSeconds = boot.EtaRemainingSeconds,
             },
             orchestratorVersion = UtmOrchestrator.Core.AppInfo.Version,
+            maxUtms,
             instances = bootList,
         });
     }
@@ -250,6 +255,7 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
         orchestratorVersion = UtmOrchestrator.Core.AppInfo.Version,
         machine = Environment.MachineName,   // на какой машине работает панель
         lanIp = OperatingSystem.IsWindows() ? UtmOrchestrator.Core.Network.UpnpManager.LanIp() : null,
+        maxUtms,                             // лимит числа УТМ на машину
         instances = list,
     });
 });
@@ -840,6 +846,8 @@ app.MapPost("/api/utm/add", (AddUtmRequest req, SerialCache serials) =>
     var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
     if (state.Instances.Any(i => string.Equals(i.TokenSerial, req.Serial, StringComparison.OrdinalIgnoreCase)))
         return Results.Conflict(new { error = "этот токен уже привязан к УТМ" });
+    if (state.Instances.Count >= maxUtms)
+        return Results.BadRequest(new { error = $"достигнут лимит {maxUtms} УТМ на этой машине" });
 
     if (!ReaderOp.Gate.Wait(0))
         return Results.Conflict(new { error = "уже идёт операция с ридерами — попробуйте позже" });
@@ -902,6 +910,8 @@ app.MapPost("/api/utm/add-all", (AddAllRequest req, SerialCache serials) =>
             foreach (var tk in tokens)
             {
                 var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+                if (state.Instances.Count >= maxUtms)
+                { ReaderOp.FileLog($"add-all: достигнут лимит {maxUtms} УТМ — остальные токены пропущены"); break; }
                 if (state.Instances.Any(i => string.Equals(i.TokenSerial, tk.Serial, StringComparison.OrdinalIgnoreCase)))
                 { skipped++; ReaderOp.FileLog($"add-all: {tk.Serial} уже привязан — пропуск"); continue; }
 

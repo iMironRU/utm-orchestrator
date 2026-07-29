@@ -897,10 +897,21 @@
       '<div>' + scanBtn + '</div>' + scanResult + batchBtn + adoptSection +
     '</div>';
 
+    // Лимит числа УТМ на машину (по числу токенов). Показываем «N из M · можно ещё K».
+    var ld = state.liveStatus || {};
+    var usedUtm = ld.total || 0;
+    var maxUtm = ld.maxUtms || 10;
+    var freeUtm = Math.max(0, maxUtm - usedUtm);
+    var limitLine = '<div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:' + c.subtleBg + ';border-radius:8px;font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">' +
+      'Установлено <b style="color:' + c.textPrimary + ';">' + usedUtm + '</b> из <b style="color:' + c.textPrimary + ';">' + maxUtm + '</b> УТМ · можно добавить ещё <b style="color:' + (freeUtm > 0 ? c.ok : c.warn) + ';">' + freeUtm + '</b>' +
+      (freeUtm === 0 ? ' — достигнут лимит' : '') +
+    '</div>';
+
     return '<div style="display:flex;flex-direction:column;gap:16px;">' +
       twoUtmCard(c) +
       '<div style="display:flex;flex-direction:column;gap:14px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
         '<div style="font:700 15px system-ui,sans-serif;color:' + c.textPrimary + ';">Установка нового УТМ</div>' +
+        limitLine +
         '<div style="font:12.5px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">Добавление УТМ читает физический токен, поэтому выполняется в интерактивной сессии (через трей). Полный мастер с назначением порта — на подходе; уже сейчас можно отсканировать подключённые токены.</div>' +
         '<div style="display:flex;flex-direction:column;gap:12px;margin-top:4px;">' + list + '</div>' +
       '</div>' +
