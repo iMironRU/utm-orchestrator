@@ -24,8 +24,14 @@ public static class UtmDistCache
         @"C:\dev-tools\utm-unpacked\app",
     };
 
-    /// <summary>Признак валидного шаблона — есть transporter\bin\utm.exe.</summary>
-    public static bool IsValid(string dir) => File.Exists(Path.Combine(dir, "transporter", "bin", "utm.exe"));
+    /// <summary>
+    /// Признак ПОЛНОГО шаблона: есть и transporter\bin\utm.exe, и JRE (jvm.dll) —
+    /// без JRE служба Transport не стартует. Проверяем оба, чтобы отвергнуть неполную
+    /// распаковку (иначе развернём УТМ, который не поднимается).
+    /// </summary>
+    public static bool IsValid(string dir) =>
+        File.Exists(Path.Combine(dir, "transporter", "bin", "utm.exe"))
+        && File.Exists(Path.Combine(dir, "jre", "bin", "client", "jvm.dll"));
 
     /// <summary>
     /// Гарантирует наличие чистого шаблона и возвращает путь к нему. existingUtmFolder —
@@ -81,19 +87,8 @@ public static class UtmDistCache
         try
         {
             string zip = Path.Combine(tmp, "dist.zip");
-            log($"скачивание дистрибутива: {DistUrl}");
-            // Дефолтный клиент уважает системный прокси (fsrar в фильтрованных сетях — через него).
-            // UA обязателен: fsrar отдаёт 403 на пустой/«curl» User-Agent (проверено).
-            using var h = new HttpClient { Timeout = TimeSpan.FromMinutes(20) };
-            h.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) UtmOrchestrator");
-            using (var resp = h.GetAsync(DistUrl, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult())
-            {
-                resp.EnsureSuccessStatusCode();
-                using var src = resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult();
-                using var dst = File.Create(zip);
-                src.CopyTo(dst);
-            }
-            log($"скачано: {new FileInfo(zip).Length / 1_048_576} МБ, распаковываю zip");
+            if (!DownloadComplete(DistUrl, zip, log))
+            { log("не удалось скачать полный дистрибутив (после повторов)"); return null; }
 
             string exeDir = Path.Combine(tmp, "exe");
             ZipFile.ExtractToDirectory(zip, exeDir);
@@ -112,6 +107,41 @@ public static class UtmDistCache
         }
         catch (Exception e) { log("скачивание/распаковка дистрибутива: " + e.Message); return null; }
         finally { try { Directory.Delete(tmp, recursive: true); } catch { } }
+    }
+
+    // Скачивание с проверкой полноты (размер == Content-Length) и повторами: .NET может
+    // молча оборвать поток на флаки-сети, а обрезанный exe → неполная распаковка (без JRE).
+    private static bool DownloadComplete(string url, string dest, Action<string> log)
+    {
+        for (int attempt = 1; attempt <= 3; attempt++)
+        {
+            long expected = 0, got = 0;
+            try
+            {
+                // Дефолтный клиент уважает системный прокси; UA обязателен (fsrar 403 на пустой/curl).
+                using var h = new HttpClient { Timeout = TimeSpan.FromMinutes(20) };
+                h.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) UtmOrchestrator");
+                log($"скачивание дистрибутива (попытка {attempt}): {url}");
+                using (var resp = h.GetAsync(url, HttpCompletionOption.ResponseHeadersRead).GetAwaiter().GetResult())
+                {
+                    resp.EnsureSuccessStatusCode();
+                    expected = resp.Content.Headers.ContentLength ?? 0;
+                    using var src = resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult();
+                    using var dst = File.Create(dest);
+                    src.CopyTo(dst);
+                }
+                got = new FileInfo(dest).Length;
+                if (expected <= 0 || got >= expected)
+                {
+                    log($"скачано: {got / 1_048_576} МБ" + (expected > 0 ? $" из {expected / 1_048_576} МБ ✓" : ""));
+                    return true;
+                }
+                log($"скачивание неполное: {got}/{expected} байт — повтор");
+            }
+            catch (Exception e) { log($"скачивание (попытка {attempt}): {e.Message}"); }
+            try { File.Delete(dest); } catch { }
+        }
+        return false;
     }
 
     private static string? FindInnoextract()

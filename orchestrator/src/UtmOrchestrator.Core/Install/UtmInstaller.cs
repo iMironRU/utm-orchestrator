@@ -61,19 +61,26 @@ public static class UtmInstaller
         // 6) файрвол на порт
         try { FirewallManager.SetPort(port, true, log); } catch (Exception e) { log("файрвол: " + e.Message); }
 
-        // 7) привязать токен и запустить (introduce)
+        // 7) привязать токен и запустить (introduce). RestartOne ВОЗВРАЩАЕТ bool — раньше
+        //    проверяли только исключение, из-за чего «не поднялся» шёл как «успех».
         var target = new BootBringUp.Target(service, port, tokenSerial, fsrar, readerName);
         var readers = allReaders.Contains(readerName) ? allReaders : allReaders.Append(readerName).ToList();
-        try { BootBringUp.RestartOne(target, readers, log); }
-        catch (Exception e) { return new(false, "привязка/запуск нового УТМ: " + e.Message, null); }
+        bool up;
+        try { up = BootBringUp.RestartOne(target, readers, log); }
+        catch (Exception e) { up = false; log("привязка/запуск нового УТМ: " + e.Message); }
 
+        // Инстанс возвращаем ВСЕГДА (софт развёрнут, служба зарегистрирована) — чтобы он
+        // попал в state.json и его можно было дожать кнопкой «Запустить», а не потерять.
         var inst = new UtmInstance
         {
             Port = port, ServiceName = service, FolderPath = folder,
             TokenSerial = tokenSerial, ExpectedFsrar = fsrar, ReaderName = readerName,
         };
-        log($"новый УТМ готов: {service} :{port}");
-        return new(true, $"УТМ {service} на порту {port}", inst);
+        log($"новый УТМ {(up ? "готов" : "развёрнут, но НЕ поднялся")}: {service} :{port}");
+        return new(up,
+            up ? $"УТМ {service} на порту {port}"
+               : $"УТМ {service} развёрнут, но не поднялся — нажмите «Запустить» в карточке",
+            inst);
     }
 
     private static bool PortInUse(int port)

@@ -854,13 +854,15 @@ app.MapPost("/api/utm/add", (AddUtmRequest req, SerialCache serials) =>
 
             var r = UtmOrchestrator.Core.Install.UtmInstaller.AddNew(
                 req.Serial!, req.Fsrar, req.Reader!, existing, allReaders, req.Port, ReaderOp.FileLog);
-            if (r.Success && r.Instance is not null)
+            // Инстанс есть → софт развёрнут и служба зарегистрирована: сохраняем в state.json
+            // (даже если не поднялся — тогда дожать можно «Запустить»). null → развернуть не удалось.
+            if (r.Instance is not null)
             {
                 var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
                 st.Instances.Add(r.Instance);
                 st.Save(OrchestratorState.DefaultPath);
                 if (!string.IsNullOrEmpty(req.Fsrar)) serials.Learn(req.Fsrar!, req.Serial!);
-                ReaderOp.FileLog($"add УТМ: успех — {r.Message}");
+                ReaderOp.FileLog($"add УТМ: {(r.Success ? "успех" : "развёрнут, но не поднялся")} — {r.Message}");
             }
             else ReaderOp.FileLog($"add УТМ: НЕ УДАЛОСЬ — {r.Message}");
         }
@@ -905,13 +907,14 @@ app.MapPost("/api/utm/add-all", (AddAllRequest req, SerialCache serials) =>
                 ReaderOp.FileLog($"add-all: устанавливаю УТМ на {tk.Serial} (ридер {tk.Reader})");
                 var r = UtmOrchestrator.Core.Install.UtmInstaller.AddNew(
                     tk.Serial!, tk.Fsrar, tk.Reader!, existing, allReaders, null, ReaderOp.FileLog);
-                if (r.Success && r.Instance is not null)
+                if (r.Instance is not null)
                 {
                     var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
                     st.Instances.Add(r.Instance);
                     st.Save(OrchestratorState.DefaultPath);
                     if (!string.IsNullOrEmpty(tk.Fsrar)) serials.Learn(tk.Fsrar!, tk.Serial!);
-                    done++; ReaderOp.FileLog($"add-all: {tk.Serial} — успех: {r.Message}");
+                    if (r.Success) { done++; ReaderOp.FileLog($"add-all: {tk.Serial} — успех: {r.Message}"); }
+                    else { failed++; ReaderOp.FileLog($"add-all: {tk.Serial} — развёрнут, но не поднялся: {r.Message}"); }
                 }
                 else { failed++; ReaderOp.FileLog($"add-all: {tk.Serial} — НЕ УДАЛОСЬ: {r.Message}"); }
             }
