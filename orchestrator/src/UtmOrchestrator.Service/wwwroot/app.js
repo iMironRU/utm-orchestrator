@@ -551,16 +551,21 @@
           '<span style="font:12px system-ui,sans-serif;color:' + exTextColor + ';">' + esc(u.exchangeText) + '</span></div>'
       : '';
     // Очереди документов: входящие (из ЕГАИС, ждут забора) и исходящие (не отправлены).
-    // Исходящие > 0 — тревожно (перед остановкой/переносом их нужно дождаться).
+    // Есть документы (>0) — КРАСНЫМ, чтобы сразу бросалось в глаза; пусто — зелёным.
     var queueLine = '';
     if (u.hasExchange && u.queue && (u.queue.incoming >= 0 || u.queue.outgoing >= 0)) {
       var inc = u.queue.incoming, outg = u.queue.outgoing;
-      var outWarn = outg > 0;
+      var any = inc > 0 || outg > 0;
+      function cnt(n) {
+        var col = n < 0 ? c.textTertiary : (n > 0 ? c.error : c.ok);
+        var val = n < 0 ? '—' : n;
+        return '<b style="color:' + col + ';">' + val + '</b>';
+      }
       queueLine = '<div style="display:flex;align-items:center;gap:6px;">' +
-        '<div style="width:6px;height:6px;border-radius:50%;background:' + (outWarn ? c.warn : c.textTertiary) + ';flex-shrink:0;"></div>' +
-        '<span style="font:12px system-ui,sans-serif;color:' + (outWarn ? c.warn : c.textSecondary) + ';">' +
-          'Входящих: ' + (inc < 0 ? '—' : inc) + ' · исходящих: ' + (outg < 0 ? '—' : outg) +
-          (outWarn ? ' (не отправлены в ЕГАИС!)' : '') +
+        '<div style="width:6px;height:6px;border-radius:50%;background:' + (any ? c.error : c.ok) + ';flex-shrink:0;"></div>' +
+        '<span style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">' +
+          'Входящих: ' + cnt(inc) + ' · исходящих: ' + cnt(outg) +
+          (outg > 0 ? ' <span style="color:' + c.error + ';font-weight:600;">— не отправлены в ЕГАИС!</span>' : '') +
         '</span></div>';
     }
     exchange = exchange + queueLine;
