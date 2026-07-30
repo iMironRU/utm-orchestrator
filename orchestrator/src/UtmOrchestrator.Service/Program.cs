@@ -729,6 +729,96 @@ app.MapPost("/api/utm/import", async (HttpRequest request, NameStore names, Seri
     finally { importGate.Release(); }
 });
 
+// --- Перенос: ОСМОТР бандла перед импортом (двухфазный импорт с выбором порта) ---
+// Тело = .zip (raw). Сохраняем под уникальным handle в imports\, читаем манифест БЕЗ
+// разворачивания, возвращаем подпись/серийник/исходный+внешний порт/подсказку локального
+// порта. Разворачивание — отдельным шагом /commit с выбранным локальным портом.
+app.MapPost("/api/utm/import/inspect", async (HttpRequest request) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    var maxFeat = request.HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+    if (maxFeat is not null && !maxFeat.IsReadOnly) maxFeat.MaxRequestBodySize = null;
+
+    string importsDir = Path.Combine(AppContext.BaseDirectory, "imports");
+    Directory.CreateDirectory(importsDir);
+    string handle = $"import-{Guid.NewGuid():N}.zip"; // уникальный, чтобы параллельные осмотры не перетёрлись
+    string bundlePath = Path.Combine(importsDir, handle);
+    try
+    {
+        await using var fs = File.Create(bundlePath);
+        await request.Body.CopyToAsync(fs);
+    }
+    catch (Exception e) { return Results.Problem("не удалось сохранить бандл: " + e.Message); }
+
+    var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var ins = UtmOrchestrator.Core.Transfer.UtmTransfer.Inspect(bundlePath, st.Instances);
+    if (!ins.Ok)
+    {
+        try { File.Delete(bundlePath); } catch { }
+        return Results.BadRequest(new { error = ins.Message });
+    }
+    return Results.Ok(new
+    {
+        ok = true,
+        handle,
+        displayName = ins.DisplayName,
+        serial = ins.TokenSerial,
+        fsrar = ins.Fsrar,
+        sourcePort = ins.SourcePort,
+        externalPort = ins.ExternalPort,
+        suggestedPort = ins.SuggestedPort,
+        alreadyBound = ins.AlreadyBound,
+    });
+});
+
+// --- Перенос: РАЗВЕРНУТЬ осмотренный бандл на выбранный локальный порт ---
+app.MapPost("/api/utm/import/commit", async (ImportCommitRequest req, NameStore names, SerialCache serials) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    if (string.IsNullOrWhiteSpace(req.Handle)) return Results.BadRequest(new { error = "handle обязателен" });
+    string safe = Path.GetFileName(req.Handle);
+    string bundlePath = Path.Combine(AppContext.BaseDirectory, "imports", safe);
+    if (!File.Exists(bundlePath)) return Results.NotFound(new { error = "бандл не найден — повторите выбор файла" });
+
+    if (!await importGate.WaitAsync(TimeSpan.FromMinutes(5)))
+        return Results.Conflict(new { error = "идёт другой импорт — попробуйте позже" });
+    try
+    {
+        var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+        if (st.Instances.Count >= maxUtms)
+            return Results.BadRequest(new { error = $"достигнут лимит {maxUtms} УТМ на этой машине" });
+
+        var r = UtmOrchestrator.Core.Transfer.UtmTransfer.Import(
+            bundlePath, st.Instances, ReaderOp.FileLog, req.Port > 0 ? req.Port : null);
+        if (r.Instance is not null)
+        {
+            st.Instances.Add(r.Instance);
+            st.Save(OrchestratorState.DefaultPath);
+            if (!string.IsNullOrEmpty(r.DisplayName) && !string.IsNullOrEmpty(r.TokenSerial))
+                names.Set(r.TokenSerial!, r.DisplayName);
+            if (!string.IsNullOrEmpty(r.Instance.ExpectedFsrar) && !string.IsNullOrEmpty(r.Instance.TokenSerial))
+                serials.Learn(r.Instance.ExpectedFsrar!, r.Instance.TokenSerial!);
+            try { File.Delete(bundlePath); } catch { }
+            ReaderOp.FileLog($"import/commit: успех — {r.Message} (подпись {r.DisplayName ?? "—"}, " +
+                $"лок {r.SourcePort}->{r.LocalPort}, внеш {(r.ExternalPort?.ToString() ?? "—")})");
+            return Results.Ok(new
+            {
+                ok = true,
+                service = r.Instance.ServiceName,
+                name = r.DisplayName,
+                sourcePort = r.SourcePort,
+                port = r.LocalPort,
+                externalPort = r.ExternalPort,
+                portChanged = r.SourcePort != r.LocalPort,
+            });
+        }
+        ReaderOp.FileLog($"import/commit: НЕ УДАЛОСЬ — {r.Message}");
+        return Results.BadRequest(new { error = r.Message });
+    }
+    catch (Exception e) { ReaderOp.FileLog($"import/commit: СБОЙ — {e}"); return Results.Problem("ошибка импорта: " + e.Message); }
+    finally { importGate.Release(); }
+});
+
 // --- Серийная привязка ВСЕХ УТМ по токенам (peel-down) ---
 // Для после переноса/перестановки токенов: BootBringUp.Apply привязывает каждую службу
 // по СЕРИЙНИКУ (не по имени ридера — оно на новой машине другое) и заново вычисляет имена
@@ -1175,6 +1265,7 @@ record AdoptRequest(List<AdoptToken>? Tokens);
 record LoginRequest(string? Username, string? Password);
 record AddUtmRequest(string? Serial, string? Fsrar, string? Reader, int? Port);
 record AddAllRequest(List<AdoptToken>? Tokens);
+record ImportCommitRequest(string? Handle, int Port);
 record SettingsRequest(bool RequireAuth, string? Username, bool NetworkAccess, List<string>? AllowedIps, string? NewPassword);
 
 // Кэш статуса обмена по папке УТМ: transport_info.log читаем не чаще раза в ~20с

@@ -51,6 +51,13 @@ public static class UtmTransfer
         bool Success, string Message, UtmInstance? Instance, string? DisplayName, string? TokenSerial,
         int SourcePort = 0, int LocalPort = 0, int? ExternalPort = null);
 
+    /// <summary>Разбор бандла БЕЗ разворачивания: данные из манифеста для предпросмотра
+    /// (подпись, серийник, исходный локальный/внешний порт, подсказка целевого локального
+    /// порта, признак «этот токен уже привязан»). Для двухфазного импорта с выбором порта.</summary>
+    public sealed record InspectResult(
+        bool Ok, string Message, string? DisplayName, string? TokenSerial, string? Fsrar,
+        int SourcePort, int? ExternalPort, int SuggestedPort, bool AlreadyBound);
+
     private const string ManifestEntry = "manifest.json";
     private const string ProcrunRegEntry = "procrun.reg";
     private const string UtmFolderPrefix = "utm/";
@@ -147,23 +154,13 @@ public static class UtmTransfer
     /// первичный ключ; имя ридера из бандла — только подсказка (на приёмнике оно другое).
     /// </summary>
     public static ImportResult Import(
-        string bundlePath, IReadOnlyList<UtmInstance> existing, Action<string> log)
+        string bundlePath, IReadOnlyList<UtmInstance> existing, Action<string> log,
+        int? desiredLocalPort = null)
     {
         if (!File.Exists(bundlePath)) return new(false, $"бандл не найден: {bundlePath}", null, null, null);
 
-        TransferManifest? manifest;
-        try
-        {
-            using var zr = ZipFile.OpenRead(bundlePath);
-            var mEntry = zr.GetEntry(ManifestEntry);
-            if (mEntry is null)
-                return new(false, "в бандле нет manifest.json — это не бандл переноса", null, null, null);
-            using var s = mEntry.Open();
-            using var sr = new StreamReader(s, Encoding.UTF8);
-            manifest = JsonSerializer.Deserialize<TransferManifest>(sr.ReadToEnd());
-        }
-        catch (Exception e) { return new(false, "не удалось прочитать манифест: " + e.Message, null, null, null); }
-        if (manifest is null) return new(false, "манифест пуст/повреждён", null, null, null);
+        var (manifest, mErr) = ReadManifest(bundlePath);
+        if (manifest is null) return new(false, mErr ?? "манифест пуст/повреждён", null, null, null);
 
         // Уже импортирован? Ключ — серийник токена (стабилен между машинами).
         if (!string.IsNullOrEmpty(manifest.TokenSerial) &&
@@ -173,7 +170,18 @@ public static class UtmTransfer
 
         string folder = ChooseFolder(manifest.SourceFolderPath);
         string service = ChooseService(manifest.ServiceName, existing);
-        int port = ChoosePort(manifest.Port, existing);
+        // Локальный порт: если пользователь задал явно — берём его (и отказываем, если занят,
+        // чтобы не «уехать» молча); иначе подбираем свободный (предпочитая исходный).
+        int port;
+        if (desiredLocalPort is int dp && dp > 0)
+        {
+            var used = existing.Where(i => i.Port > 0).Select(i => i.Port).ToHashSet();
+            if (used.Contains(dp) || PortInUse(dp))
+                return new(false, $"локальный порт {dp} уже занят — выберите другой",
+                    null, manifest.DisplayName, manifest.TokenSerial);
+            port = dp;
+        }
+        else port = ChoosePort(manifest.Port, existing);
         log($"импорт: серийник {manifest.TokenSerial}, папка {folder}, служба {service}, порт {port} " +
             $"(из бандла: {manifest.ServiceName}/{manifest.Port}/{manifest.SourceFolderPath})");
 
@@ -230,6 +238,40 @@ public static class UtmTransfer
             $"(из бандла локальный {manifest.Port}) — привяжется по серийнику при «Привязать все токены»");
         return new(true, $"УТМ {service} импортирован (локальный {port})", inst,
             manifest.DisplayName, manifest.TokenSerial, manifest.Port, port, manifest.ExternalPort);
+    }
+
+    /// <summary>Прочитать манифест бандла БЕЗ разворачивания — для предпросмотра перед
+    /// импортом (подпись, серийник, исходный/внешний порт, подсказка целевого порта).</summary>
+    public static InspectResult Inspect(string bundlePath, IReadOnlyList<UtmInstance> existing)
+    {
+        if (!File.Exists(bundlePath))
+            return new(false, "бандл не найден", null, null, null, 0, null, 0, false);
+        var (m, err) = ReadManifest(bundlePath);
+        if (m is null) return new(false, err ?? "манифест повреждён", null, null, null, 0, null, 0, false);
+
+        bool bound = !string.IsNullOrEmpty(m.TokenSerial) &&
+            existing.Any(i => string.Equals(i.TokenSerial, m.TokenSerial, StringComparison.OrdinalIgnoreCase));
+        int suggested = SuggestLocalPort(m.Port, existing);
+        return new(true, "ok", m.DisplayName, m.TokenSerial, m.Fsrar, m.Port, m.ExternalPort, suggested, bound);
+    }
+
+    /// <summary>Подсказка свободного локального порта: исходный, если свободен, иначе следующий.</summary>
+    public static int SuggestLocalPort(int desired, IReadOnlyList<UtmInstance> existing)
+        => ChoosePort(desired, existing);
+
+    private static (TransferManifest? Manifest, string? Error) ReadManifest(string bundlePath)
+    {
+        try
+        {
+            using var zr = ZipFile.OpenRead(bundlePath);
+            var mEntry = zr.GetEntry(ManifestEntry);
+            if (mEntry is null) return (null, "в бандле нет manifest.json — это не бандл переноса");
+            using var s = mEntry.Open();
+            using var sr = new StreamReader(s, Encoding.UTF8);
+            var m = JsonSerializer.Deserialize<TransferManifest>(sr.ReadToEnd());
+            return m is null ? (null, "манифест пуст/повреждён") : (m, null);
+        }
+        catch (Exception e) { return (null, "не удалось прочитать манифест: " + e.Message); }
     }
 
     // Папка приёмника: предпочитаем исходную (меньше расхождений путей), если свободна;

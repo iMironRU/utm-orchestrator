@@ -924,16 +924,46 @@
   // серийная привязка по вставленным токенам. Бандл несёт папку УТМ, базу, службу и
   // «подпись» (имя точки) — на приёмнике ничего переподписывать не нужно.
   function importCard(c) {
+    var busy = state.importInspecting
+      ? '<div style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';">Читаю бандлы…</div>' : '';
+    var staging = state.importStaging;
+    var stagingHtml = '';
+    if (staging && staging.length) {
+      var rows = staging.map(function (r, i) {
+        var warn = r.alreadyBound ? '<span style="color:' + c.warn + ';"> · уже привязан, будет пропущен</span>' : '';
+        var ext = r.externalPort ? ('внешний ' + r.externalPort + ' (сохранится)') : 'внешний = локальному';
+        return '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 11px;background:' + c.subtleBg + ';border-radius:8px;">' +
+            '<div style="flex:1;min-width:150px;">' +
+              '<div style="font:12.5px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(r.name) + warn + '</div>' +
+              '<div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';">исходный локальный ' + r.sourcePort + ' · ' + ext + '</div>' +
+            '</div>' +
+            '<label style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';display:flex;align-items:center;gap:6px;">локальный порт ' +
+              '<input type="number" min="1" max="65535" data-input="stagePort" data-idx="' + i + '" value="' + r.targetPort + '" ' + (r.alreadyBound ? 'disabled' : '') +
+              ' style="width:82px;padding:6px 8px;border:1px solid ' + c.borderStrong + ';border-radius:6px;background:' + c.cardBg + ';color:' + c.textPrimary + ';font:12px ui-monospace,Menlo,Consolas,monospace;">' +
+            '</label>' +
+          '</div>';
+      }).join('');
+      stagingHtml = '<div style="display:flex;flex-direction:column;gap:8px;border-top:1px solid ' + c.border + ';padding-top:12px;margin-top:2px;">' +
+        '<div style="font:700 12.5px system-ui,sans-serif;color:' + c.textPrimary + ';">К импорту: ' + staging.length + ' — задайте локальные порты (по ним ходят LAN-подключения; внешний порт сохранится сам)</div>' +
+        rows +
+        '<div style="display:flex;gap:10px;margin-top:4px;flex-wrap:wrap;">' +
+          '<button data-action="commitImport" style="background:' + c.brand + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Импортировать на выбранные порты</button>' +
+          '<button data-action="cancelImport" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textSecondary + ';padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Отмена</button>' +
+        '</div>' +
+      '</div>';
+    }
     return '<div style="display:flex;flex-direction:column;gap:12px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
       '<div style="font:700 14px system-ui,sans-serif;color:' + c.textPrimary + ';">Перенос: принять УТМ с другого компьютера</div>' +
-      '<div style="font:12px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">На старом компьютере откройте карточку каждого УТМ → «Экспортировать для переноса» и скачайте бандл(ы). Здесь загрузите их — УТМ развернутся со своей базой, службой и <b>подписью (именем точки)</b>, но пока не поднимутся. Затем переставьте токены в этот компьютер и нажмите «Привязать все токены».</div>' +
+      '<div style="font:12px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">На старом компьютере откройте карточку каждого УТМ → «Экспортировать для переноса» и скачайте бандл(ы). Здесь выберите их — покажу список с портами, дам задать локальный порт каждому, разверну (со своей базой, службой и <b>подписью</b>). Затем переставьте токены и нажмите «Привязать все токены».</div>' +
       '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:2px;">' +
         '<label style="background:' + c.brand + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;display:inline-flex;align-items:center;">' +
-          'Загрузить бандл(ы) переноса…' +
+          'Выбрать бандл(ы) переноса…' +
           '<input type="file" data-action="importPicked" accept=".zip" multiple style="display:none;">' +
         '</label>' +
         '<button data-action="rebindAll" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Привязать все токены</button>' +
       '</div>' +
+      busy +
+      stagingHtml +
       '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">«Привязать все токены» кратко перезапустит службу смарт-карт и поднимет каждый УТМ на свой токен по серийнику (~1-2 мин общего простоя). Делайте, когда все токены вставлены.</div>' +
     '</div>';
   }
@@ -1490,38 +1520,71 @@
     } });
   }
 
-  /* Загрузка бандлов переноса по очереди (сервер обрабатывает импорт по одному). Тело
-     запроса = сам .zip (raw), имя — в query. Показываем прогресс и итог тостами. */
-  function uploadBundles(zips, i, acc) {
+  /* Фаза 1: осмотр бандлов (без разворачивания) — читаем манифест, собираем список с
+     предлагаемыми локальными портами, разводим дубликаты внутри партии и против занятых. */
+  function inspectBundles(zips, i, acc) {
     if (i >= zips.length) {
+      var used = {};
+      ((state.liveStatus && state.liveStatus.instances) || []).forEach(function (u) { if (u.port) used[u.port] = true; });
+      acc.forEach(function (row) {
+        if (row.alreadyBound) return;
+        var p = row.targetPort || row.sourcePort || 8080;
+        while (used[p]) p++;
+        row.targetPort = p; used[p] = true;
+      });
+      setState({ importInspecting: false, importStaging: acc });
+      if (!acc.length) showToast('Не удалось прочитать бандлы — это бандлы переноса?');
+      return;
+    }
+    var f = zips[i];
+    fetch('/api/utm/import/inspect?name=' + encodeURIComponent(f.name), { method: 'POST', body: f })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (x) {
+        if (x.ok && x.d.ok) {
+          acc.push({
+            handle: x.d.handle, file: f.name,
+            name: x.d.displayName || ('ФСРАР ' + (x.d.fsrar || '?')),
+            serial: x.d.serial, sourcePort: x.d.sourcePort, externalPort: x.d.externalPort,
+            targetPort: x.d.suggestedPort || x.d.sourcePort, alreadyBound: !!x.d.alreadyBound,
+          });
+        } else { showToast('Пропущен ' + f.name + ': ' + (x.d.error || 'не бандл')); }
+      })
+      .catch(function () { showToast('Ошибка чтения ' + f.name); })
+      .then(function () { inspectBundles(zips, i + 1, acc); });
+  }
+
+  /* Фаза 2: развернуть выбранные бандлы на указанных локальных портах (по очереди). */
+  function commitBundles(rows, i, acc) {
+    if (i >= rows.length) {
+      setState({ importStaging: null });
       showToast('Импорт: успешно ' + acc.ok + ', с ошибкой ' + acc.fail +
-        (acc.ok ? ' · теперь вставьте токены и «Привязать все токены»' : ''));
-      // Карта портов «было→стало» — чтобы перенастроить проброс роутера / учётные системы.
+        (acc.ok ? ' · вставьте токены и «Привязать все токены»' : ''));
       if (acc.map.length) {
         askConfirm({ title: 'Импорт готов — карта портов', okLabel: 'Понятно',
-          message: 'Проверьте, где сдвинулся локальный порт, и перенастройте проброс роутера на новый локальный порт. Внешний порт (адрес для учётных систем) сохранён.\n\n' +
+          message: 'Локальный порт — для LAN-подключений; внешний (для проброса роутера) сохранён. Проверьте и при необходимости поправьте проброс роутера:\n\n' +
             acc.map.join('\n') }, null);
       }
       pollStatus(true);
       return;
     }
-    var f = zips[i];
-    showToast('Импорт ' + (i + 1) + '/' + zips.length + ': ' + f.name + '…');
-    fetch('/api/utm/import?name=' + encodeURIComponent(f.name), { method: 'POST', body: f })
-      .then(function (r) {
-        return r.json().catch(function () { return {}; }).then(function (d) {
-          if (r.ok) {
-            acc.ok++;
-            var who = d.name || d.service || f.name;
-            var portTxt = d.portChanged ? ('локальный ' + d.sourcePort + '→' + d.port) : ('локальный ' + d.port);
-            var extTxt = d.externalPort ? (' · внешний ' + d.externalPort + ' (не менялся)') : '';
-            acc.map.push('• ' + who + ': ' + portTxt + extTxt);
-            showToast('Импортирован: ' + who + ' · ' + portTxt);
-          } else { acc.fail++; showToast('Не удалось (' + f.name + '): ' + (d.error || 'ошибка')); }
-        });
+    var row = rows[i];
+    showToast('Импорт ' + (i + 1) + '/' + rows.length + ': ' + row.name + '…');
+    fetch('/api/utm/import/commit', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ handle: row.handle, port: row.targetPort }),
+    })
+      .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (x) {
+        if (x.ok && x.d.ok) {
+          acc.ok++;
+          var who = x.d.name || row.name;
+          var portTxt = x.d.portChanged ? ('локальный ' + x.d.sourcePort + '→' + x.d.port) : ('локальный ' + x.d.port);
+          var extTxt = x.d.externalPort ? (' · внешний ' + x.d.externalPort) : '';
+          acc.map.push('• ' + who + ': ' + portTxt + extTxt);
+        } else { acc.fail++; showToast('Не удалось (' + row.name + '): ' + (x.d.error || 'ошибка')); }
       })
-      .catch(function () { acc.fail++; showToast('Ошибка сети при импорте ' + f.name); })
-      .then(function () { uploadBundles(zips, i + 1, acc); });
+      .catch(function () { acc.fail++; showToast('Ошибка сети: ' + row.name); })
+      .then(function () { commitBundles(rows, i + 1, acc); });
   }
 
   /* ====================== ДЕЙСТВИЯ ====================== */
@@ -1579,17 +1642,37 @@
           .catch(function () { showToast('Не удалось запустить экспорт'); });
       });
     },
-    /* Импорт бандлов переноса (сторона-приёмник): грузим выбранные .zip по очереди. */
+    /* Импорт: фаза 1 — выбрали .zip → осматриваем (манифест) и показываем список с портами. */
     importPicked: function (el) {
       var files = el.files ? Array.prototype.slice.call(el.files) : [];
       el.value = ''; // сброс — чтобы повторный выбор того же файла снова сработал
       var zips = files.filter(function (f) { return /\.zip$/i.test(f.name); });
       if (!zips.length) { if (files.length) showToast('Нужны .zip-бандлы переноса'); return; }
-      askConfirm({ title: 'Импорт УТМ', okLabel: 'Импортировать (' + zips.length + ')',
-        message: 'Импортировать ' + zips.length + ' бандл(ов)? УТМ развернутся со своей базой, службой и подписью, но НЕ поднимутся. После — вставьте токены и нажмите «Привязать все токены».' }, function () {
-        uploadBundles(zips, 0, { ok: 0, fail: 0, map: [] });
+      setState({ importInspecting: true, importStaging: null });
+      showToast('Читаю бандлы (' + zips.length + ')…');
+      inspectBundles(zips, 0, []);
+    },
+    /* Правка целевого локального порта в списке (без ре-рендера, чтобы не терять фокус). */
+    stagePort: function (el) {
+      var idx = parseInt(el.getAttribute('data-idx'), 10);
+      var v = parseInt(el.value, 10);
+      if (state.importStaging && state.importStaging[idx]) state.importStaging[idx].targetPort = isNaN(v) ? 0 : v;
+    },
+    /* Импорт: фаза 2 — развернуть выбранные бандлы на указанных портах. */
+    commitImport: function () {
+      var rows = (state.importStaging || []).filter(function (r) { return !r.alreadyBound; });
+      if (!rows.length) { showToast('Нет бандлов к импорту (все уже привязаны)'); return; }
+      var bad = rows.filter(function (r) { return !(r.targetPort > 0 && r.targetPort < 65536); });
+      if (bad.length) { showToast('Проверьте порты: ' + bad.map(function (r) { return r.name; }).join(', ')); return; }
+      var seen = {}, dup = 0;
+      rows.forEach(function (r) { if (seen[r.targetPort]) dup = r.targetPort; seen[r.targetPort] = true; });
+      if (dup) { showToast('Порт ' + dup + ' указан дважды — исправьте'); return; }
+      askConfirm({ title: 'Импорт на выбранные порты', okLabel: 'Импортировать (' + rows.length + ')',
+        message: 'Развернуть ' + rows.length + ' УТМ на указанных локальных портах? Внешние порты сохранятся. Поднятие — отдельным шагом «Привязать все токены».' }, function () {
+        commitBundles(rows, 0, { ok: 0, fail: 0, map: [] });
       });
     },
+    cancelImport: function () { setState({ importStaging: null, importInspecting: false }); },
     /* Серийная привязка всех УТМ по вставленным токенам (после переноса/перестановки). */
     rebindAll: function () {
       askConfirm({ title: 'Привязать все токены', okLabel: 'Привязать',
