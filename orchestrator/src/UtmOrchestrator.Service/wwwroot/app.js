@@ -524,8 +524,7 @@
 
     // Групповой выбор (подготовка переноса): вкл/выкл + «выбрать все».
     var selMode = !!state.utmSelectMode;
-    var sel = state.utmSelected || {};
-    var selCount = views.filter(function (v) { return sel[v.service || v.id]; }).length;
+    var selCount = views.filter(utmIsSelected).length;
     var selectToolbar = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
       (selMode
         ? '<span style="font:12.5px system-ui,sans-serif;color:' + c.textTertiary + ';margin-right:auto;">Выбрано ' + selCount + ' из ' + views.length + '</span>' +
@@ -534,7 +533,7 @@
         : '<button data-action="toggleSelectMode" style="' + btnGhost(c) + 'margin-left:auto;">Выбрать несколько</button>') +
     '</div>';
 
-    var cards = shown.map(function (u) { return overviewCard(u, c, selMode, !!sel[u.service || u.id]); }).join('');
+    var cards = shown.map(function (u) { return overviewCard(u, c, selMode, utmIsSelected(u)); }).join('');
     var grid = '<div style="display:grid;grid-template-columns:' + gridCols + ';gap:16px;">' + cards + '</div>';
 
     // Плавающая панель групповых действий — когда что-то выбрано.
@@ -595,11 +594,21 @@
     }
     exchange = exchange + queueLine;
     var key = u.service || u.id;
-    var cardAction = selMode ? 'toggleSelectUtm' : 'openUtm';
-    var checkbox = selMode
-      ? '<div style="width:20px;height:20px;border-radius:5px;border:2px solid ' + (checked ? c.brand : c.borderStrong) + ';background:' + (checked ? c.brand : 'transparent') + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
+    var blocked = selMode && utmHasDocs(u); // с документами выбор недоступен
+    var cardAction = !selMode ? 'openUtm' : (blocked ? 'selUtmBlocked' : 'toggleSelectUtm');
+    var checkbox = '';
+    if (selMode && blocked) {
+      // Замок вместо чекбокса — плитку с документами выбрать нельзя.
+      checkbox = '<div title="Есть документы — выбор недоступен" style="width:20px;height:20px;border-radius:5px;border:2px solid ' + c.borderStrong + ';background:' + c.subtleBg + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;opacity:.75;">' +
+          '<svg width="11" height="11" viewBox="0 0 24 24" fill="none"><rect x="5" y="11" width="14" height="9" rx="2" stroke="' + c.textTertiary + '" stroke-width="2"/><path d="M8 11V8a4 4 0 018 0v3" stroke="' + c.textTertiary + '" stroke-width="2"/></svg></div>';
+    } else if (selMode) {
+      checkbox = '<div style="width:20px;height:20px;border-radius:5px;border:2px solid ' + (checked ? c.brand : c.borderStrong) + ';background:' + (checked ? c.brand : 'transparent') + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
           (checked ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 6" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '') +
-        '</div>'
+        '</div>';
+    }
+    // Подсказка, почему плитку нельзя выбрать (когда в режиме выбора и есть документы).
+    var docHint = blocked
+      ? '<div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';">Есть документы — выбор недоступен, обработайте их или дождитесь обмена</div>'
       : '';
     // В режиме выбора нижние ссылки-действия скрываем — вся плитка = переключатель выбора.
     var footer = selMode ? ''
@@ -608,8 +617,9 @@
           '<a data-action="openUtmWeb" data-port="' + esc(u.port) + '" style="font:600 12px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">Открыть УТМ ↗</a>' +
           '<a data-action="openUtm" data-id="' + esc(u.id) + '" style="font:600 12px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">Подробнее</a>' +
         '</div>';
-    // Вся плитка кликабельна: обычно → карточка УТМ, в режиме выбора → переключение выбора.
-    return '<div data-action="' + cardAction + '" data-id="' + esc(u.id) + '" data-service="' + esc(key) + '" title="' + (selMode ? 'Выбрать/снять' : 'Открыть карточку УТМ') + '" style="min-width:0;background:' + (checked ? c.brandBg : c.cardBg) + ';border:1px solid ' + (checked ? c.brand : c.border) + ';border-radius:10px;padding:18px 18px 14px;display:flex;flex-direction:column;gap:12px;cursor:pointer;">' +
+    // Вся плитка кликабельна: обычно → карточка УТМ; в режиме выбора → переключение выбора
+    // (кроме плиток с документами — они заблокированы).
+    return '<div data-action="' + cardAction + '" data-id="' + esc(u.id) + '" data-service="' + esc(key) + '" title="' + (selMode ? (blocked ? 'Есть документы — выбор недоступен' : 'Выбрать/снять') : 'Открыть карточку УТМ') + '" style="min-width:0;background:' + (checked ? c.brandBg : c.cardBg) + ';border:1px solid ' + (checked ? c.brand : c.border) + ';border-radius:10px;padding:18px 18px 14px;display:flex;flex-direction:column;gap:12px;cursor:' + (blocked ? 'not-allowed' : 'pointer') + ';' + (blocked ? 'opacity:.85;' : '') + '">' +
       '<div style="display:flex;flex-direction:column;gap:8px;min-width:0;">' +
         '<div style="display:flex;align-items:center;gap:10px;min-width:0;">' + checkbox +
           '<div style="font:700 15px/1.3 system-ui,sans-serif;color:' + c.textPrimary + ';min-width:0;">' + esc(u.name) + '</div></div>' +
@@ -617,7 +627,7 @@
           '<div style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">порт ' + esc(u.port) + (u.version ? ' · v' + esc(u.version) : '') + '</div>' +
           statusPill(u, c) +
         '</div></div>' +
-      callout + metaBlock + progress + exchange + footer +
+      callout + metaBlock + progress + exchange + docHint + footer +
     '</div>';
   }
 
@@ -632,10 +642,21 @@
     '</div>';
   }
 
-  /* Выбранные УТМ (сырые модели) — для групповых действий. Ключ выбора = служба или id. */
-  function selectedUtmList() {
+  /* Есть ли в УТМ документы: входящие из ЕГАИС (ждут забора) или неотправленные
+     исходящие. Пока документы есть — УТМ НЕЛЬЗЯ выбрать для переноса/остановки
+     (риск потери исходящих / незабранных входящих). queue=-1/нет → считаем «нет». */
+  function utmHasDocs(u) {
+    var q = u && u.queue;
+    return !!(q && ((q.incoming || 0) > 0 || (q.outgoing || 0) > 0));
+  }
+  /* Выбран ли УТМ: помечен И без документов (с документами пометка игнорируется). */
+  function utmIsSelected(u) {
     var sel = state.utmSelected || {};
-    return utmSource().filter(function (u) { return sel[u.service || u.id]; });
+    return !!sel[u.service || u.id] && !utmHasDocs(u);
+  }
+  /* Выбранные УТМ (сырые модели) — для групповых действий; с документами исключены. */
+  function selectedUtmList() {
+    return utmSource().filter(utmIsSelected);
   }
 
   /* Остановить службы по очереди (стоп — fire-and-forget, но не долбим все разом). */
@@ -1824,12 +1845,21 @@
     },
     toggleSelectUtm: function (el) {
       var key = el.getAttribute('data-service'); if (!key) return;
+      // Страховка: УТМ с документами выбрать нельзя (в норме сюда и не попадём — у таких
+      // плиток действие selUtmBlocked, но защищаемся на случай гонки данных).
+      var u = utmSource().filter(function (x) { return (x.service || x.id) === key; })[0];
+      if (u && utmHasDocs(u)) { showToast('В УТМ есть документы — выбор недоступен'); return; }
       var sel = Object.assign({}, state.utmSelected || {});
       if (sel[key]) delete sel[key]; else sel[key] = true;
       setState({ utmSelected: sel });
     },
+    selUtmBlocked: function () {
+      showToast('В этом УТМ есть документы — сначала обработайте их или дождитесь обмена');
+    },
     selectAllUtms: function () {
-      var keys = utmSource().map(function (u) { return u.service || u.id; }).filter(Boolean);
+      // «Выбрать все» = все БЕЗ документов (с документами не берём).
+      var keys = utmSource().filter(function (u) { return !utmHasDocs(u); })
+        .map(function (u) { return u.service || u.id; }).filter(Boolean);
       var sel = state.utmSelected || {};
       var allOn = keys.length && keys.every(function (k) { return sel[k]; });
       var next = {};
