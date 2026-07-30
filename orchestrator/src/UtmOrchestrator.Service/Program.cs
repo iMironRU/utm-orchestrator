@@ -631,6 +631,56 @@ app.MapPost("/api/utm/export", (RestartRequest req, NameStore names) =>
     return Results.Accepted(value: new { ok = true, service = req.Service });
 });
 
+// --- Перенос: ЭКСПОРТ НЕСКОЛЬКИХ УТМ разом (для группового переноса) ---
+// Экспорт держит глобальный ReaderOp.Gate, поэтому пакуем ПОСЛЕДОВАТЕЛЬНО в одном фоне:
+// один захват gate → цикл по службам (стоп→zip→старт каждой) → отпускаем. Так параллельные
+// экспорты не спорят за gate и УТМ по очереди кратко останавливаются, а не все разом.
+app.MapPost("/api/utm/export-batch", (BatchServicesRequest req, NameStore names) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    var services = (req.Services ?? new List<string>())
+        .Where(s => !string.IsNullOrWhiteSpace(s))
+        .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+    if (services.Count == 0) return Results.BadRequest(new { error = "не выбрано ни одного УТМ" });
+
+    if (!ReaderOp.Gate.Wait(0))
+        return Results.Conflict(new { error = "уже идёт операция с ридерами — попробуйте позже" });
+
+    var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var allReaders = state.Instances.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
+    string exportsDir = Path.Combine(AppContext.BaseDirectory, "exports");
+    // Захватываем инстансы+подписи заранее (в фоне state не перечитываем).
+    var jobs = services
+        .Select(s => state.Instances.FirstOrDefault(i =>
+            string.Equals(i.ServiceName, s, StringComparison.OrdinalIgnoreCase)))
+        .Where(i => i is not null)
+        .Select(i => (Inst: i!, Name: names.Get(i!.TokenSerial)))
+        .ToList();
+    if (jobs.Count == 0) { ReaderOp.Gate.Release(); return Results.BadRequest(new { error = "выбранные УТМ не найдены" }); }
+
+    _ = Task.Run(() =>
+    {
+        using var _ = BringUpStatus.Begin();
+        try
+        {
+            int ok = 0;
+            foreach (var (inst, dn) in jobs)
+            {
+                try
+                {
+                    var r = UtmOrchestrator.Core.Transfer.UtmTransfer.Export(inst, allReaders, null, exportsDir, ReaderOp.FileLog, dn);
+                    if (r.Success) ok++;
+                    ReaderOp.FileLog($"export-batch {inst.ServiceName}: success={r.Success} — {r.Message}");
+                }
+                catch (Exception e) { ReaderOp.FileLog($"export-batch {inst.ServiceName}: СБОЙ — {e}"); }
+            }
+            ReaderOp.FileLog($"export-batch: готово, успешно {ok}/{jobs.Count}");
+        }
+        finally { ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true, count = jobs.Count });
+});
+
 // --- Список готовых бандлов переноса ---
 app.MapGet("/api/exports", () =>
 {
@@ -1265,6 +1315,7 @@ record AdoptRequest(List<AdoptToken>? Tokens);
 record LoginRequest(string? Username, string? Password);
 record AddUtmRequest(string? Serial, string? Fsrar, string? Reader, int? Port);
 record AddAllRequest(List<AdoptToken>? Tokens);
+record BatchServicesRequest(List<string>? Services);
 record ImportCommitRequest(string? Handle, int Port);
 record SettingsRequest(bool RequireAuth, string? Username, bool NetworkAccess, List<string>? AllowedIps, string? NewPassword);
 

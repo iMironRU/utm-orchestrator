@@ -249,6 +249,10 @@
   }
 
   /* ====================== МЕЛКИЕ РЕНДЕР-ХЕЛПЕРЫ ====================== */
+  function btnGhost(c) { return 'background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;'; }
+  function btnBrand(c) { return 'background:' + c.brand + ';border:none;color:#fff;padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;'; }
+  function btnDanger(c) { return 'background:transparent;border:1px solid ' + c.error + ';color:' + c.error + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;'; }
+
   function segmented(c, options) {
     // options: [{label, active, action}]
     var btns = options.map(function (o) {
@@ -600,18 +604,73 @@
   /* ====================== ЭКРАН: УТМ — СПИСОК ====================== */
   function utmListScreen(c) {
     if (!dataLoaded()) return loadingCard(c);
-    var rows = utmSource().map(function (u) {
-      var v = buildUtmView(u, c);
-      return '<div data-action="openUtm" data-id="' + esc(v.id) + '" style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:10px;cursor:pointer;flex-wrap:wrap;">' +
+    var views = utmSource().map(function (u) { return buildUtmView(u, c); });
+    var selMode = !!state.utmSelectMode;
+    var sel = state.utmSelected || {};
+    var selCount = views.filter(function (v) { return sel[v.service || v.id]; }).length;
+
+    // Тулбар: включить/выключить режим выбора + «выбрать все».
+    var toolbar = '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">' +
+      '<div style="font:12.5px system-ui,sans-serif;color:' + c.textTertiary + ';">' + views.length + ' УТМ' + (selMode && selCount ? ' · выбрано ' + selCount : '') + '</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+        (selMode
+          ? '<button data-action="selectAllUtms" style="' + btnGhost(c) + '">' + (selCount === views.length && views.length ? 'Снять все' : 'Выбрать все') + '</button>' +
+            '<button data-action="toggleSelectMode" style="' + btnGhost(c) + '">Готово</button>'
+          : '<button data-action="toggleSelectMode" style="' + btnGhost(c) + '">Выбрать несколько</button>') +
+      '</div></div>';
+
+    var rows = views.map(function (v) {
+      var key = v.service || v.id;
+      var checked = !!sel[key];
+      var rowAction = selMode ? 'toggleSelectUtm' : 'openUtm';
+      var checkbox = selMode
+        ? '<div style="width:20px;height:20px;border-radius:5px;border:2px solid ' + (checked ? c.brand : c.borderStrong) + ';background:' + (checked ? c.brand : 'transparent') + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
+            (checked ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 6" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '') +
+          '</div>'
+        : '';
+      // Короткий бейдж очереди — чтобы прямо в списке видеть, где есть документы.
+      var q = v.queue, qBadge = '';
+      if (q && (q.incoming > 0 || q.outgoing > 0)) {
+        qBadge = '<span style="font:11px system-ui,sans-serif;color:' + c.error + ';white-space:nowrap;">вх ' + (q.incoming > 0 ? q.incoming : 0) + ' · исх ' + (q.outgoing > 0 ? q.outgoing : 0) + '</span>';
+      }
+      return '<div data-action="' + rowAction + '" data-id="' + esc(v.id) + '" data-service="' + esc(key) + '" style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;background:' + (checked ? c.brandBg : c.cardBg) + ';border:1px solid ' + (checked ? c.brand : c.border) + ';border-radius:10px;cursor:pointer;flex-wrap:wrap;">' +
         '<div style="display:flex;align-items:center;gap:14px;min-width:0;">' +
+          checkbox +
           '<div style="width:9px;height:9px;border-radius:50%;background:' + v.statusColor + ';flex-shrink:0;' + v.dotAnim + '"></div>' +
           '<div style="min-width:0;"><div style="font:700 14.5px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(v.name) + '</div>' +
           '<div style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';margin-top:2px;">порт ' + esc(v.port) + ' · ФСРАР ' + esc(v.fsrarDisplay) + (v.version ? ' · v' + esc(v.version) : '') + '</div></div>' +
         '</div>' +
-        '<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:20px;background:' + v.statusBg + ';flex-shrink:0;"><span style="font:600 12px system-ui,sans-serif;color:' + v.statusColor + ';">' + esc(v.statusLabel) + '</span></div>' +
+        '<div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">' + qBadge +
+          '<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:20px;background:' + v.statusBg + ';"><span style="font:600 12px system-ui,sans-serif;color:' + v.statusColor + ';">' + esc(v.statusLabel) + '</span></div>' +
+        '</div>' +
       '</div>';
     }).join('');
-    return '<div style="display:flex;flex-direction:column;gap:10px;">' + rows + '</div>';
+
+    // Плавающая панель групповых действий — видна, когда что-то выбрано.
+    var actionBar = (selMode && selCount)
+      ? '<div style="position:sticky;bottom:0;display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:12px 14px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;box-shadow:0 -3px 14px rgba(0,0,0,.10);margin-top:2px;">' +
+          '<span style="font:600 12.5px system-ui,sans-serif;color:' + c.textSecondary + ';margin-right:2px;">Выбрано ' + selCount + ':</span>' +
+          '<button data-action="bulkCheckDocs" style="' + btnGhost(c) + '">Проверить документы</button>' +
+          '<button data-action="bulkExport" style="' + btnBrand(c) + '">Экспортировать для переноса</button>' +
+          '<button data-action="bulkStop" style="' + btnDanger(c) + '">Остановить</button>' +
+        '</div>'
+      : '';
+
+    return '<div style="display:flex;flex-direction:column;gap:10px;">' + toolbar + rows + actionBar + '</div>';
+  }
+
+  /* Выбранные УТМ (сырые модели) — для групповых действий. Ключ выбора = служба или id. */
+  function selectedUtmList() {
+    var sel = state.utmSelected || {};
+    return utmSource().filter(function (u) { return sel[u.service || u.id]; });
+  }
+
+  /* Остановить службы по очереди (стоп — fire-and-forget, но не долбим все разом). */
+  function stopSequential(services, i) {
+    if (i >= services.length) { pollStatus(true); return; }
+    fetch('/api/utm/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: services[i] }) })
+      .then(function () {}).catch(function () {})
+      .then(function () { stopSequential(services, i + 1); });
   }
 
   /* ====================== ЭКРАН: УТМ — ДЕТАЛИ ====================== */
@@ -1783,6 +1842,76 @@
           if (!r.ok) throw new Error();
           showToast('УТМ остановлен — статус обновится автоматически'); pollStatus(true);
         }).catch(function () { showToast('Не удалось остановить'); });
+      });
+    },
+    /* ---- Групповой выбор на странице УТМ ---- */
+    toggleSelectMode: function () {
+      var on = !state.utmSelectMode;
+      setState({ utmSelectMode: on, utmSelected: on ? (state.utmSelected || {}) : {} });
+    },
+    toggleSelectUtm: function (el) {
+      var key = el.getAttribute('data-service'); if (!key) return;
+      var sel = Object.assign({}, state.utmSelected || {});
+      if (sel[key]) delete sel[key]; else sel[key] = true;
+      setState({ utmSelected: sel });
+    },
+    selectAllUtms: function () {
+      var keys = utmSource().map(function (u) { return u.service || u.id; }).filter(Boolean);
+      var sel = state.utmSelected || {};
+      var allOn = keys.length && keys.every(function (k) { return sel[k]; });
+      var next = {};
+      if (!allOn) keys.forEach(function (k) { next[k] = true; });
+      setState({ utmSelected: next });
+    },
+    /* Групповая проверка документов: сводка входящих/исходящих по выбранным УТМ. */
+    bulkCheckDocs: function () {
+      var list = selectedUtmList();
+      if (!list.length) { showToast('Ничего не выбрано'); return; }
+      var lines = list.map(function (u) {
+        var q = u.queue || {};
+        var inc = (q.incoming != null) ? q.incoming : -1;
+        var outg = (q.outgoing != null) ? q.outgoing : -1;
+        var flag = outg > 0 ? '  ⚠ исходящие НЕ отправлены!' : (inc > 0 ? '  • есть входящие' : '');
+        return '• ' + (u.name || u.service) + ': входящих ' + (inc < 0 ? '—' : inc) + ' · исходящих ' + (outg < 0 ? '—' : outg) + flag;
+      });
+      var anyOut = list.some(function (u) { return u.queue && u.queue.outgoing > 0; });
+      askConfirm({ title: 'Документы в выбранных УТМ', okLabel: 'Понятно',
+        message: (anyOut
+          ? '⚠ Есть УТМ с неотправленными исходящими — их остановка/перенос приведёт к потере. Дождитесь отправки (станет 0).\n\n'
+          : 'Данные по последнему опросу (обновляются автоматически).\n\n') + lines.join('\n') }, null);
+    },
+    /* Групповой экспорт выбранных УТМ для переноса (сервер пакует по очереди). */
+    bulkExport: function () {
+      var services = selectedUtmList().map(function (u) { return u.service; }).filter(Boolean);
+      if (!services.length) { showToast('У выбранных нет служб для экспорта'); return; }
+      askConfirm({ title: 'Экспорт для переноса', okLabel: 'Экспортировать (' + services.length + ')',
+        message: 'Экспортировать ' + services.length + ' УТМ для переноса?\nПойдут по очереди — каждый ненадолго остановится и вернётся (всего ~' + (services.length * 2) + '–' + (services.length * 3) + ' мин). Источник не меняется. Бандлы появятся в разделе «Установка» и в карточках.' }, function () {
+        showToast('Экспорт ' + services.length + ' УТМ запущен — пакую по очереди…');
+        fetch('/api/utm/export-batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ services: services }) })
+          .then(function (r) {
+            if (r.status === 409) { showToast('Уже идёт операция с ридерами — подождите'); return; }
+            if (!r.ok) throw new Error();
+            showToast('Экспорт идёт — бандлы появятся через несколько минут');
+            var t = setInterval(loadExports, 8000); setTimeout(function () { clearInterval(t); }, services.length * 180000 + 60000);
+            setState({ utmSelectMode: false, utmSelected: {} });
+          })
+          .catch(function () { showToast('Не удалось запустить экспорт'); });
+      });
+    },
+    /* Групповая остановка выбранных УТМ (с предупреждением про неотправленные исходящие). */
+    bulkStop: function () {
+      var list = selectedUtmList();
+      var services = list.map(function (u) { return u.service; }).filter(Boolean);
+      if (!services.length) { showToast('У выбранных нет служб для остановки'); return; }
+      var risky = list.filter(function (u) { return u.queue && u.queue.outgoing > 0; });
+      var warn = risky.length
+        ? '\n\n⚠ У ' + risky.length + ' из них есть неотправленные исходящие — при остановке потеряются: ' + risky.map(function (u) { return u.name || u.service; }).join(', ') + '. Лучше сначала дождаться отправки.'
+        : '';
+      askConfirm({ title: 'Остановить выбранные', okLabel: 'Остановить (' + services.length + ')', danger: true,
+        message: 'Остановить ' + services.length + ' УТМ?\nОбмен с ЕГАИС для них прекратится, пока не запустите снова.' + warn }, function () {
+        showToast('Останавливаю ' + services.length + ' УТМ…');
+        stopSequential(services, 0);
+        setState({ utmSelectMode: false, utmSelected: {} });
       });
     },
     /* Установить УТМ на ВСЕ непривязанные токены разом. */
