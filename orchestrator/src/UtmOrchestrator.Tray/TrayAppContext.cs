@@ -38,6 +38,8 @@ public sealed class TrayAppContext : ApplicationContext
         menu.Items.Add("Открыть", null, (_, _) => ShowWindow());
         menu.Items.Add("Обновить", null, async (_, _) => await RefreshAsync());
         menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Перезапустить службу", null, async (_, _) => await RestartServiceAsync());
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Выход", null, (_, _) => ExitApp());
 
         _notify = new NotifyIcon
@@ -118,6 +120,24 @@ public sealed class TrayAppContext : ApplicationContext
         {
             _busy = false;
         }
+    }
+
+    // Перезапуск службы оркестратора: подтверждаем и просим службу перезапуститься
+    // (она делает это отдельным процессом, без UAC). Панель ненадолго пропадёт.
+    private async Task RestartServiceAsync()
+    {
+        var ok = MessageBox.Show(
+            "Перезапустить службу оркестратора?\nПанель ненадолго станет недоступна (~10-30 сек). УТМ продолжат работать.",
+            AppInfo.Title, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (ok != DialogResult.Yes) return;
+
+        bool sent = await StatusProvider.RestartServiceAsync();
+        _lastSummary = sent ? "перезапуск службы…" : "не удалось перезапустить службу";
+        _lastOkUtc = DateTime.UtcNow;
+        UpdateTooltip();
+        _notify.Icon = sent ? _busyIcon : _error;
+        // Часто опрашиваем, чтобы поймать возвращение службы.
+        _timer.Interval = FastPollMs;
     }
 
     private void ShowWindow()

@@ -677,6 +677,25 @@ app.MapPost("/api/utm/heal", () =>
     return Results.Accepted(value: new { ok = true, healing = true });
 });
 
+// --- Перезапуск службы оркестратора (из трея, без UAC) ---
+// Служба не может корректно перезапустить сама себя изнутри — порождаем ОТДЕЛЬНЫЙ
+// процесс (служба = LocalSystem = админ), который переживёт остановку службы. Панель
+// пропадёт на ~10-30с; УТМ не трогаются.
+app.MapPost("/api/service/restart", () =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    try
+    {
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+            "powershell.exe",
+            "-NoProfile -WindowStyle Hidden -Command \"Stop-Service UtmOrchestrator -Force; Start-Sleep 2; Start-Service UtmOrchestrator\"")
+        { UseShellExecute = false, CreateNoWindow = true });
+        ReaderOp.FileLog("service: перезапуск службы по команде из трея");
+    }
+    catch (Exception e) { return Results.Problem("не удалось запустить перезапуск: " + e.Message); }
+    return Results.Accepted(value: new { ok = true });
+});
+
 // --- Очередь интерактивных заданий (веб ↔ трей) ---
 // Веб кладёт задание (scan/heal), трей (в интерактивной сессии) забирает pending,
 // выполняет и возвращает результат, веб опрашивает по id. Только localhost.

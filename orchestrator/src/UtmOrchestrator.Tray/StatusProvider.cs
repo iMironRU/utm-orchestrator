@@ -37,6 +37,17 @@ public static class StatusProvider
         new SocketsHttpHandler { UseProxy = false, ConnectTimeout = TimeSpan.FromSeconds(3) })
     { Timeout = TimeSpan.FromSeconds(6) };
 
+    /// <summary>Попросить службу перезапуститься (она сделает это отдельным процессом).</summary>
+    public static async Task<bool> RestartServiceAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            using var resp = await _http.PostAsync("http://127.0.0.1:8090/api/service/restart", null, ct);
+            return resp.IsSuccessStatusCode;
+        }
+        catch { return false; }
+    }
+
     public static async Task<StatusSnapshot> GetAsync(CancellationToken ct = default)
     {
         ServiceState svc = ServiceControl.GetState(OrchestratorServiceName);
