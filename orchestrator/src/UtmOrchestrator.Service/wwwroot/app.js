@@ -1496,6 +1496,12 @@
     if (i >= zips.length) {
       showToast('Импорт: успешно ' + acc.ok + ', с ошибкой ' + acc.fail +
         (acc.ok ? ' · теперь вставьте токены и «Привязать все токены»' : ''));
+      // Карта портов «было→стало» — чтобы перенастроить проброс роутера / учётные системы.
+      if (acc.map.length) {
+        askConfirm({ title: 'Импорт готов — карта портов', okLabel: 'Понятно',
+          message: 'Проверьте, где сдвинулся локальный порт, и перенастройте проброс роутера на новый локальный порт. Внешний порт (адрес для учётных систем) сохранён.\n\n' +
+            acc.map.join('\n') }, null);
+      }
       pollStatus(true);
       return;
     }
@@ -1504,8 +1510,14 @@
     fetch('/api/utm/import?name=' + encodeURIComponent(f.name), { method: 'POST', body: f })
       .then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (d) {
-          if (r.ok) { acc.ok++; showToast('Импортирован: ' + (d.name || d.service || f.name) + ' :' + (d.port || '?')); }
-          else { acc.fail++; showToast('Не удалось (' + f.name + '): ' + (d.error || 'ошибка')); }
+          if (r.ok) {
+            acc.ok++;
+            var who = d.name || d.service || f.name;
+            var portTxt = d.portChanged ? ('локальный ' + d.sourcePort + '→' + d.port) : ('локальный ' + d.port);
+            var extTxt = d.externalPort ? (' · внешний ' + d.externalPort + ' (не менялся)') : '';
+            acc.map.push('• ' + who + ': ' + portTxt + extTxt);
+            showToast('Импортирован: ' + who + ' · ' + portTxt);
+          } else { acc.fail++; showToast('Не удалось (' + f.name + '): ' + (d.error || 'ошибка')); }
         });
       })
       .catch(function () { acc.fail++; showToast('Ошибка сети при импорте ' + f.name); })
@@ -1575,7 +1587,7 @@
       if (!zips.length) { if (files.length) showToast('Нужны .zip-бандлы переноса'); return; }
       askConfirm({ title: 'Импорт УТМ', okLabel: 'Импортировать (' + zips.length + ')',
         message: 'Импортировать ' + zips.length + ' бандл(ов)? УТМ развернутся со своей базой, службой и подписью, но НЕ поднимутся. После — вставьте токены и нажмите «Привязать все токены».' }, function () {
-        uploadBundles(zips, 0, { ok: 0, fail: 0 });
+        uploadBundles(zips, 0, { ok: 0, fail: 0, map: [] });
       });
     },
     /* Серийная привязка всех УТМ по вставленным токенам (после переноса/перестановки). */

@@ -37,14 +37,19 @@ public static class UtmTransfer
         string OrchestratorVersion,
         // Кастомная «подпись» УТМ (имя точки), заданная пользователем. Едет в бандле,
         // чтобы на приёмнике не переподписывать вручную. По умолчанию null (старые бандлы).
-        string? DisplayName = null);
+        string? DisplayName = null,
+        // Внешний порт (WAN → проброс роутера → LAN:локальный). По нему учётные системы
+        // ходят снаружи; его надо сохранить при переезде, даже если локальный порт сдвинулся.
+        // null → снаружи виден тот же порт, что локальный. По умолчанию null (старые бандлы).
+        int? ExternalPort = null);
 
     public sealed record ExportResult(bool Success, string Message, string? BundlePath);
 
     /// <summary>Результат импорта: развёрнутый инстанс (ещё не поднятый) + подпись/серийник
-    /// для восстановления имени и обучения кэшей на приёмнике.</summary>
+    /// для восстановления имени и кэшей + карта портов (было→стало) для перенастройки проброса.</summary>
     public sealed record ImportResult(
-        bool Success, string Message, UtmInstance? Instance, string? DisplayName, string? TokenSerial);
+        bool Success, string Message, UtmInstance? Instance, string? DisplayName, string? TokenSerial,
+        int SourcePort = 0, int LocalPort = 0, int? ExternalPort = null);
 
     private const string ManifestEntry = "manifest.json";
     private const string ProcrunRegEntry = "procrun.reg";
@@ -83,7 +88,7 @@ public static class UtmTransfer
             var manifest = new TransferManifest(
                 svc, inst.Port, inst.ExpectedFsrar, inst.TokenSerial, inst.ReaderName,
                 inst.FolderPath, utmVersion, imagePath, startType,
-                DateTime.UtcNow.ToString("o"), AppInfo.Version, displayName);
+                DateTime.UtcNow.ToString("o"), AppInfo.Version, displayName, inst.ExternalPort);
 
             // Пишем в .tmp и переименовываем по готовности — чтобы список/скачивание
             // не подхватили недописанный бандл.
@@ -180,9 +185,12 @@ public static class UtmTransfer
             int files = 0;
             foreach (var entry in zr.Entries)
             {
-                if (!entry.FullName.StartsWith(UtmFolderPrefix, StringComparison.Ordinal)) continue;
-                if (entry.FullName.EndsWith("/", StringComparison.Ordinal)) continue; // директория
-                string rel = entry.FullName.Substring(UtmFolderPrefix.Length).Replace('/', Path.DirectorySeparatorChar);
+                // Нормализуем слэши: разные архиваторы пишут utm/ или utm\ (напр. .NET
+                // Framework на Windows — обратные). Матчим и извлекаем независимо от этого.
+                string full = entry.FullName.Replace('\\', '/');
+                if (!full.StartsWith(UtmFolderPrefix, StringComparison.Ordinal)) continue;
+                if (full.EndsWith("/", StringComparison.Ordinal)) continue; // директория
+                string rel = full.Substring(UtmFolderPrefix.Length).Replace('/', Path.DirectorySeparatorChar);
                 string dest = Path.Combine(folder, rel);
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
                 entry.ExtractToFile(dest, overwrite: true);
@@ -213,9 +221,15 @@ public static class UtmTransfer
             TokenSerial = manifest.TokenSerial,
             ExpectedFsrar = manifest.Fsrar,
             ReaderName = manifest.ReaderName, // подсказка; уточнится при серийной привязке
+            // Внешний порт сохраняем как на источнике — «наружу» УТМ должен остаться виден
+            // под тем же портом (учётные системы его не меняют), даже если локальный сдвинулся.
+            ExternalPort = manifest.ExternalPort,
         };
-        log($"импорт УТМ развёрнут (не поднят): {service} :{port} — привяжется по серийнику при «Привязать все токены»");
-        return new(true, $"УТМ {service} импортирован на порт {port}", inst, manifest.DisplayName, manifest.TokenSerial);
+        string extNote = manifest.ExternalPort is int ep && ep != port ? $", внешний {ep}" : "";
+        log($"импорт УТМ развёрнут (не поднят): {service} локальный :{port}{extNote} " +
+            $"(из бандла локальный {manifest.Port}) — привяжется по серийнику при «Привязать все токены»");
+        return new(true, $"УТМ {service} импортирован (локальный {port})", inst,
+            manifest.DisplayName, manifest.TokenSerial, manifest.Port, port, manifest.ExternalPort);
     }
 
     // Папка приёмника: предпочитаем исходную (меньше расхождений путей), если свободна;

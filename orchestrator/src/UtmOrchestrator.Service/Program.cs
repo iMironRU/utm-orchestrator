@@ -705,8 +705,18 @@ app.MapPost("/api/utm/import", async (HttpRequest request, NameStore names, Seri
                 names.Set(r.TokenSerial!, r.DisplayName);
             if (!string.IsNullOrEmpty(r.Instance.ExpectedFsrar) && !string.IsNullOrEmpty(r.Instance.TokenSerial))
                 serials.Learn(r.Instance.ExpectedFsrar!, r.Instance.TokenSerial!);
-            ReaderOp.FileLog($"import: успех — {r.Message} (подпись: {r.DisplayName ?? "—"})");
-            return Results.Ok(new { ok = true, service = r.Instance.ServiceName, port = r.Instance.Port, name = r.DisplayName });
+            ReaderOp.FileLog($"import: успех — {r.Message} (подпись: {r.DisplayName ?? "—"}, " +
+                $"локальный {r.SourcePort}→{r.LocalPort}, внешний {(r.ExternalPort?.ToString() ?? "—")})");
+            return Results.Ok(new
+            {
+                ok = true,
+                service = r.Instance.ServiceName,
+                name = r.DisplayName,
+                sourcePort = r.SourcePort,
+                port = r.LocalPort,
+                externalPort = r.ExternalPort,
+                portChanged = r.SourcePort != r.LocalPort,
+            });
         }
         ReaderOp.FileLog($"import: НЕ УДАЛОСЬ — {r.Message}");
         return Results.BadRequest(new { error = r.Message });
