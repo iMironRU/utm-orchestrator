@@ -916,6 +916,25 @@
         '<div style="display:flex;flex-direction:column;gap:12px;margin-top:4px;">' + list + '</div>' +
       '</div>' +
       scanCard +
+      importCard(c) +
+    '</div>';
+  }
+
+  // Приём УТМ с другого компьютера: загрузка бандлов (экспортированных на источнике) +
+  // серийная привязка по вставленным токенам. Бандл несёт папку УТМ, базу, службу и
+  // «подпись» (имя точки) — на приёмнике ничего переподписывать не нужно.
+  function importCard(c) {
+    return '<div style="display:flex;flex-direction:column;gap:12px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
+      '<div style="font:700 14px system-ui,sans-serif;color:' + c.textPrimary + ';">Перенос: принять УТМ с другого компьютера</div>' +
+      '<div style="font:12px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">На старом компьютере откройте карточку каждого УТМ → «Экспортировать для переноса» и скачайте бандл(ы). Здесь загрузите их — УТМ развернутся со своей базой, службой и <b>подписью (именем точки)</b>, но пока не поднимутся. Затем переставьте токены в этот компьютер и нажмите «Привязать все токены».</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:2px;">' +
+        '<label style="background:' + c.brand + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;display:inline-flex;align-items:center;">' +
+          'Загрузить бандл(ы) переноса…' +
+          '<input type="file" data-action="importPicked" accept=".zip" multiple style="display:none;">' +
+        '</label>' +
+        '<button data-action="rebindAll" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Привязать все токены</button>' +
+      '</div>' +
+      '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">«Привязать все токены» кратко перезапустит службу смарт-карт и поднимет каждый УТМ на свой токен по серийнику (~1-2 мин общего простоя). Делайте, когда все токены вставлены.</div>' +
     '</div>';
   }
 
@@ -1471,6 +1490,28 @@
     } });
   }
 
+  /* Загрузка бандлов переноса по очереди (сервер обрабатывает импорт по одному). Тело
+     запроса = сам .zip (raw), имя — в query. Показываем прогресс и итог тостами. */
+  function uploadBundles(zips, i, acc) {
+    if (i >= zips.length) {
+      showToast('Импорт: успешно ' + acc.ok + ', с ошибкой ' + acc.fail +
+        (acc.ok ? ' · теперь вставьте токены и «Привязать все токены»' : ''));
+      pollStatus(true);
+      return;
+    }
+    var f = zips[i];
+    showToast('Импорт ' + (i + 1) + '/' + zips.length + ': ' + f.name + '…');
+    fetch('/api/utm/import?name=' + encodeURIComponent(f.name), { method: 'POST', body: f })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (d) {
+          if (r.ok) { acc.ok++; showToast('Импортирован: ' + (d.name || d.service || f.name) + ' :' + (d.port || '?')); }
+          else { acc.fail++; showToast('Не удалось (' + f.name + '): ' + (d.error || 'ошибка')); }
+        });
+      })
+      .catch(function () { acc.fail++; showToast('Ошибка сети при импорте ' + f.name); })
+      .then(function () { uploadBundles(zips, i + 1, acc); });
+  }
+
   /* ====================== ДЕЙСТВИЯ ====================== */
   function setScreen(s) { setState({ screen: s, mobileNavOpen: false, notifOpen: false }); }
 
@@ -1524,6 +1565,33 @@
             var t = setInterval(loadExports, 6000); setTimeout(function () { clearInterval(t); }, 180000);
           })
           .catch(function () { showToast('Не удалось запустить экспорт'); });
+      });
+    },
+    /* Импорт бандлов переноса (сторона-приёмник): грузим выбранные .zip по очереди. */
+    importPicked: function (el) {
+      var files = el.files ? Array.prototype.slice.call(el.files) : [];
+      el.value = ''; // сброс — чтобы повторный выбор того же файла снова сработал
+      var zips = files.filter(function (f) { return /\.zip$/i.test(f.name); });
+      if (!zips.length) { if (files.length) showToast('Нужны .zip-бандлы переноса'); return; }
+      askConfirm({ title: 'Импорт УТМ', okLabel: 'Импортировать (' + zips.length + ')',
+        message: 'Импортировать ' + zips.length + ' бандл(ов)? УТМ развернутся со своей базой, службой и подписью, но НЕ поднимутся. После — вставьте токены и нажмите «Привязать все токены».' }, function () {
+        uploadBundles(zips, 0, { ok: 0, fail: 0 });
+      });
+    },
+    /* Серийная привязка всех УТМ по вставленным токенам (после переноса/перестановки). */
+    rebindAll: function () {
+      askConfirm({ title: 'Привязать все токены', okLabel: 'Привязать',
+        message: 'Поднять и привязать ВСЕ УТМ по серийникам вставленных токенов?\nКратко перезапустится служба смарт-карт — УТМ на ~1-2 мин станут недоступны, затем поднимутся заново. Делайте, когда все токены вставлены.' }, function () {
+        showToast('Привязка по токенам запущена (~1-2 мин)…');
+        fetch('/api/utm/rebind-all', { method: 'POST' })
+          .then(function (r) {
+            if (r.status === 409) { showToast('Уже идёт операция с ридерами — подождите'); return; }
+            return r.json().catch(function () { return {}; }).then(function (d) {
+              if (!r.ok) { showToast('Не удалось: ' + (d.error || 'ошибка')); return; }
+              showToast('Привязка идёт — следите за статусом на «Обзоре»');
+            });
+          })
+          .catch(function () { showToast('Ошибка запроса привязки'); });
       });
     },
     openLogsFor: function (el) {

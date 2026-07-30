@@ -4,6 +4,7 @@ using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Win32;
+using UtmOrchestrator.Core.Install;
 using UtmOrchestrator.Core.Recovery;
 using UtmOrchestrator.Core.Services;
 using UtmOrchestrator.Core.State;
@@ -33,9 +34,17 @@ public static class UtmTransfer
         string ServiceImagePath,
         int ServiceStartType,
         string ExportedAtUtc,
-        string OrchestratorVersion);
+        string OrchestratorVersion,
+        // Кастомная «подпись» УТМ (имя точки), заданная пользователем. Едет в бандле,
+        // чтобы на приёмнике не переподписывать вручную. По умолчанию null (старые бандлы).
+        string? DisplayName = null);
 
     public sealed record ExportResult(bool Success, string Message, string? BundlePath);
+
+    /// <summary>Результат импорта: развёрнутый инстанс (ещё не поднятый) + подпись/серийник
+    /// для восстановления имени и обучения кэшей на приёмнике.</summary>
+    public sealed record ImportResult(
+        bool Success, string Message, UtmInstance? Instance, string? DisplayName, string? TokenSerial);
 
     private const string ManifestEntry = "manifest.json";
     private const string ProcrunRegEntry = "procrun.reg";
@@ -47,7 +56,7 @@ public static class UtmTransfer
     /// </summary>
     public static ExportResult Export(
         UtmInstance inst, IReadOnlyList<string> allReaders, string? utmVersion,
-        string exportsDir, Action<string> log)
+        string exportsDir, Action<string> log, string? displayName = null)
     {
         if (string.IsNullOrWhiteSpace(inst.FolderPath) || !Directory.Exists(inst.FolderPath))
             return new(false, $"папка УТМ не найдена: {inst.FolderPath}", null);
@@ -74,7 +83,7 @@ public static class UtmTransfer
             var manifest = new TransferManifest(
                 svc, inst.Port, inst.ExpectedFsrar, inst.TokenSerial, inst.ReaderName,
                 inst.FolderPath, utmVersion, imagePath, startType,
-                DateTime.UtcNow.ToString("o"), AppInfo.Version);
+                DateTime.UtcNow.ToString("o"), AppInfo.Version, displayName);
 
             // Пишем в .tmp и переименовываем по готовности — чтобы список/скачивание
             // не подхватили недописанный бандл.
@@ -120,6 +129,153 @@ public static class UtmTransfer
                 catch (Exception e) { log($"не удалось вернуть {svc}: {e.Message}"); }
             }
         }
+    }
+
+    /// <summary>
+    /// ИМПОРТ (сторона-приёмник): разворачивает бандл на этой машине. Читает манифест,
+    /// подбирает папку/службу/порт (предпочитает исходные — меньше расхождений путей; при
+    /// коллизии берёт свободные), распаковывает папку УТМ, при смене порта правит конфиги,
+    /// регистрирует procrun-службу и открывает порт в файрволе. Службу НЕ поднимает —
+    /// токен может быть ещё не подключён; привязка делается серийным подъёмом
+    /// (BootBringUp.Apply) отдельным шагом «Привязать все токены».
+    /// Идентификатор токена (серийник) — стабилен и на новой машине, поэтому это
+    /// первичный ключ; имя ридера из бандла — только подсказка (на приёмнике оно другое).
+    /// </summary>
+    public static ImportResult Import(
+        string bundlePath, IReadOnlyList<UtmInstance> existing, Action<string> log)
+    {
+        if (!File.Exists(bundlePath)) return new(false, $"бандл не найден: {bundlePath}", null, null, null);
+
+        TransferManifest? manifest;
+        try
+        {
+            using var zr = ZipFile.OpenRead(bundlePath);
+            var mEntry = zr.GetEntry(ManifestEntry);
+            if (mEntry is null)
+                return new(false, "в бандле нет manifest.json — это не бандл переноса", null, null, null);
+            using var s = mEntry.Open();
+            using var sr = new StreamReader(s, Encoding.UTF8);
+            manifest = JsonSerializer.Deserialize<TransferManifest>(sr.ReadToEnd());
+        }
+        catch (Exception e) { return new(false, "не удалось прочитать манифест: " + e.Message, null, null, null); }
+        if (manifest is null) return new(false, "манифест пуст/повреждён", null, null, null);
+
+        // Уже импортирован? Ключ — серийник токена (стабилен между машинами).
+        if (!string.IsNullOrEmpty(manifest.TokenSerial) &&
+            existing.Any(i => string.Equals(i.TokenSerial, manifest.TokenSerial, StringComparison.OrdinalIgnoreCase)))
+            return new(false, $"токен {manifest.TokenSerial} уже привязан к УТМ на этой машине",
+                null, manifest.DisplayName, manifest.TokenSerial);
+
+        string folder = ChooseFolder(manifest.SourceFolderPath);
+        string service = ChooseService(manifest.ServiceName, existing);
+        int port = ChoosePort(manifest.Port, existing);
+        log($"импорт: серийник {manifest.TokenSerial}, папка {folder}, служба {service}, порт {port} " +
+            $"(из бандла: {manifest.ServiceName}/{manifest.Port}/{manifest.SourceFolderPath})");
+
+        // Распаковка utm/ → выбранная папка.
+        try
+        {
+            Directory.CreateDirectory(folder);
+            using var zr = ZipFile.OpenRead(bundlePath);
+            int files = 0;
+            foreach (var entry in zr.Entries)
+            {
+                if (!entry.FullName.StartsWith(UtmFolderPrefix, StringComparison.Ordinal)) continue;
+                if (entry.FullName.EndsWith("/", StringComparison.Ordinal)) continue; // директория
+                string rel = entry.FullName.Substring(UtmFolderPrefix.Length).Replace('/', Path.DirectorySeparatorChar);
+                string dest = Path.Combine(folder, rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+                entry.ExtractToFile(dest, overwrite: true);
+                files++;
+            }
+            log($"распаковано файлов УТМ: {files}");
+            if (files == 0) return new(false, "в бандле нет файлов УТМ (utm/…)", null, manifest.DisplayName, manifest.TokenSerial);
+        }
+        catch (Exception e) { return new(false, "распаковка: " + e.Message, null, manifest.DisplayName, manifest.TokenSerial); }
+
+        // Порт в конфиги (при совпадении с исходным — безвредно перезапишет тем же значением).
+        SetPortKey(Path.Combine(folder, "transporter", "conf", "transport.properties"), "web.server.port", port, log);
+        SetPortKey(Path.Combine(folder, "agent", "conf", "agent.properties"), "utm.port", port, log);
+
+        // Регистрация службы штатным install.bat развёрнутой папки (относительные пути).
+        if (!ProcrunService.Register(service, folder, log))
+            return new(false, "не удалось зарегистрировать службу (procrun)", null, manifest.DisplayName, manifest.TokenSerial);
+
+        // Файрвол на порт (как при обычной установке).
+        try { UtmOrchestrator.Core.Firewall.FirewallManager.SetPort(port, true, log); }
+        catch (Exception e) { log("файрвол: " + e.Message); }
+
+        var inst = new UtmInstance
+        {
+            Port = port,
+            ServiceName = service,
+            FolderPath = folder,
+            TokenSerial = manifest.TokenSerial,
+            ExpectedFsrar = manifest.Fsrar,
+            ReaderName = manifest.ReaderName, // подсказка; уточнится при серийной привязке
+        };
+        log($"импорт УТМ развёрнут (не поднят): {service} :{port} — привяжется по серийнику при «Привязать все токены»");
+        return new(true, $"УТМ {service} импортирован на порт {port}", inst, manifest.DisplayName, manifest.TokenSerial);
+    }
+
+    // Папка приёмника: предпочитаем исходную (меньше расхождений путей), если свободна;
+    // иначе — следующая свободная C:\UTM_N.
+    private static string ChooseFolder(string? sourceFolder)
+    {
+        if (!string.IsNullOrWhiteSpace(sourceFolder) && !Directory.Exists(sourceFolder))
+            return sourceFolder!;
+        int idx = 2;
+        string folder;
+        do { folder = idx == 1 ? @"C:\UTM" : $@"C:\UTM_{idx}"; idx++; } while (Directory.Exists(folder));
+        return folder;
+    }
+
+    // Имя службы: предпочитаем исходное, если не занято и не установлено; иначе Transport/TransportN.
+    private static string ChooseService(string sourceService, IReadOnlyList<UtmInstance> existing)
+    {
+        var used = existing.Select(i => i.ServiceName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrWhiteSpace(sourceService) && !used.Contains(sourceService)
+            && ServiceControl.GetState(sourceService) == ServiceState.NotInstalled)
+            return sourceService;
+        string svcBase = "Transport";
+        string service = svcBase;
+        int s = 2;
+        while (used.Contains(service) || ServiceControl.GetState(service) != ServiceState.NotInstalled)
+            service = svcBase + s++;
+        return service;
+    }
+
+    // Порт: предпочитаем исходный, если свободен; иначе следующий свободный.
+    private static int ChoosePort(int desired, IReadOnlyList<UtmInstance> existing)
+    {
+        var used = existing.Where(i => i.Port > 0).Select(i => i.Port).ToHashSet();
+        int port = desired > 0 ? desired : 8080;
+        while (used.Contains(port) || PortInUse(port)) port++;
+        return port;
+    }
+
+    private static bool PortInUse(int port)
+    {
+        try
+        {
+            return System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties()
+                .GetActiveTcpListeners().Any(ep => ep.Port == port);
+        }
+        catch { return false; }
+    }
+
+    // Проставить целочисленный ключ в .properties (заменить или дописать).
+    private static void SetPortKey(string path, string key, int value, Action<string> log)
+    {
+        if (!File.Exists(path)) { log($"нет {path} — пропуск {key}"); return; }
+        string text = File.ReadAllText(path);
+        var rx = new System.Text.RegularExpressions.Regex(@"(?m)^(\s*" +
+            System.Text.RegularExpressions.Regex.Escape(key) + @"\s*=).*$");
+        text = rx.IsMatch(text)
+            ? rx.Replace(text, "${1}" + value, 1)
+            : text.TrimEnd() + $"\n{key}={value}\n";
+        File.WriteAllText(path, text);
+        log($"{Path.GetFileName(path)}: {key}={value}");
     }
 
     // --- вспомогательное ---

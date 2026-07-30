@@ -28,6 +28,12 @@ builder.WebHost.UseUrls(url);
 // appsettings (MaxUtms), по умолчанию 10. Показываем в панели и не даём превысить.
 int maxUtms = builder.Configuration.GetValue("MaxUtms", 10);
 
+// Сериализация импорта бандлов между собой (распаковка + регистрация службы + запись
+// state.json). НЕ трогает ридеры, поэтому это отдельный лёгкий гейт, не ReaderOp.Gate —
+// иначе импорт блокировал бы статус/подъём и последовательная загрузка бандлов упиралась
+// бы в занятый общий замок.
+var importGate = new SemaphoreSlim(1, 1);
+
 var app = builder.Build();
 
 // --- Доступ: IP-allowlist + серверная авторизация (когда включены) ---
@@ -594,7 +600,7 @@ app.MapPost("/api/utm/port", (ChangePortRequest req) =>
 // --- Перенос: ЭКСПОРТ УТМ в бандл (сторона-источник) ---
 // Стоп службы → zip всей папки УТМ + манифест + procrun-реестр → introduce-возврат.
 // Источник не разрушается. Бандл кладётся в <baseDir>\exports.
-app.MapPost("/api/utm/export", (RestartRequest req) =>
+app.MapPost("/api/utm/export", (RestartRequest req, NameStore names) =>
 {
     if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
     if (string.IsNullOrWhiteSpace(req.Service)) return Results.BadRequest(new { error = "service обязателен" });
@@ -608,13 +614,15 @@ app.MapPost("/api/utm/export", (RestartRequest req) =>
 
     var allReaders = state.Instances.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
     string exportsDir = Path.Combine(AppContext.BaseDirectory, "exports");
+    // Кастомная подпись УТМ (имя точки) — кладём в бандл, чтобы не переподписывать на приёмнике.
+    string? displayName = names.Get(inst.TokenSerial);
 
     _ = Task.Run(() =>
     {
         using var _ = BringUpStatus.Begin();
         try
         {
-            var r = UtmOrchestrator.Core.Transfer.UtmTransfer.Export(inst, allReaders, null, exportsDir, ReaderOp.FileLog);
+            var r = UtmOrchestrator.Core.Transfer.UtmTransfer.Export(inst, allReaders, null, exportsDir, ReaderOp.FileLog, displayName);
             ReaderOp.FileLog($"export {req.Service}: success={r.Success} — {r.Message} {r.BundlePath}");
         }
         catch (Exception e) { ReaderOp.FileLog($"export {req.Service}: СБОЙ — {e}"); }
@@ -643,6 +651,119 @@ app.MapGet("/api/exports/download", (string name) =>
     string path = Path.Combine(AppContext.BaseDirectory, "exports", name);
     if (!File.Exists(path)) return Results.NotFound(new { error = "бандл не найден" });
     return Results.File(path, "application/zip", name);
+});
+
+// --- Перенос: ИМПОРТ бандла (сторона-приёмник) ---
+// Тело запроса = сам .zip-бандл (raw octet-stream, чтобы не упираться в лимиты multipart
+// для больших папок УТМ). Разворачиваем папку + регистрируем службу + пишем в state, НЕ
+// поднимая (токен может быть ещё не воткнут). Подпись (имя точки) из манифеста → NameStore.
+// Привязка к токену — отдельным шагом «Привязать все токены» (серийный подъём).
+app.MapPost("/api/utm/import", async (HttpRequest request, NameStore names, SerialCache serials) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+
+    // Снимаем лимит размера тела для этого запроса — бандлы большие (папка УТМ + JRE + база).
+    var maxFeat = request.HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+    if (maxFeat is not null && !maxFeat.IsReadOnly) maxFeat.MaxRequestBodySize = null;
+
+    string importsDir = Path.Combine(AppContext.BaseDirectory, "imports");
+    Directory.CreateDirectory(importsDir);
+    string reqName = request.Query["name"].ToString();
+    string safe = Path.GetFileName(reqName);
+    if (string.IsNullOrWhiteSpace(safe) || !safe.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+        safe = $"UTM-import-{DateTime.UtcNow:yyyyMMdd-HHmmss}.zip";
+    string bundlePath = Path.Combine(importsDir, safe);
+
+    // Приём файла (стрим на диск) — вне гейта, чтобы параллельные закачки не ждали друг друга.
+    try
+    {
+        await using var fs = File.Create(bundlePath);
+        await request.Body.CopyToAsync(fs);
+    }
+    catch (Exception e)
+    {
+        ReaderOp.FileLog($"import: не удалось сохранить бандл — {e.Message}");
+        return Results.Problem("не удалось сохранить бандл: " + e.Message);
+    }
+
+    // Обработка — под отдельным лёгким гейтом, ИНЛАЙН (клиент грузит бандлы по очереди и
+    // видит реальный результат каждого). Импорт не трогает ридеры → ReaderOp.Gate не нужен.
+    if (!await importGate.WaitAsync(TimeSpan.FromMinutes(5)))
+        return Results.Conflict(new { error = "идёт другой импорт — попробуйте позже" });
+    try
+    {
+        var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+        if (st.Instances.Count >= maxUtms)
+            return Results.BadRequest(new { error = $"достигнут лимит {maxUtms} УТМ на этой машине" });
+
+        var r = UtmOrchestrator.Core.Transfer.UtmTransfer.Import(bundlePath, st.Instances, ReaderOp.FileLog);
+        if (r.Instance is not null)
+        {
+            st.Instances.Add(r.Instance);
+            st.Save(OrchestratorState.DefaultPath);
+            if (!string.IsNullOrEmpty(r.DisplayName) && !string.IsNullOrEmpty(r.TokenSerial))
+                names.Set(r.TokenSerial!, r.DisplayName);
+            if (!string.IsNullOrEmpty(r.Instance.ExpectedFsrar) && !string.IsNullOrEmpty(r.Instance.TokenSerial))
+                serials.Learn(r.Instance.ExpectedFsrar!, r.Instance.TokenSerial!);
+            ReaderOp.FileLog($"import: успех — {r.Message} (подпись: {r.DisplayName ?? "—"})");
+            return Results.Ok(new { ok = true, service = r.Instance.ServiceName, port = r.Instance.Port, name = r.DisplayName });
+        }
+        ReaderOp.FileLog($"import: НЕ УДАЛОСЬ — {r.Message}");
+        return Results.BadRequest(new { error = r.Message });
+    }
+    catch (Exception e)
+    {
+        ReaderOp.FileLog($"import: СБОЙ — {e}");
+        return Results.Problem("ошибка импорта: " + e.Message);
+    }
+    finally { importGate.Release(); }
+});
+
+// --- Серийная привязка ВСЕХ УТМ по токенам (peel-down) ---
+// Для после переноса/перестановки токенов: BootBringUp.Apply привязывает каждую службу
+// по СЕРИЙНИКУ (не по имени ридера — оно на новой машине другое) и заново вычисляет имена
+// ридеров, сохраняя их в state.json. Кратко перезапускает SCardSvr → короткий общий простой.
+app.MapPost("/api/utm/rebind-all", () =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var targets = state.Instances
+        .Where(i => !string.IsNullOrEmpty(i.TokenSerial))
+        .Select(i => new BootBringUp.Target(i.ServiceName, i.Port, i.TokenSerial!, i.ExpectedFsrar, i.ReaderName))
+        .ToList();
+    if (targets.Count == 0) return Results.BadRequest(new { error = "нет привязок в state.json" });
+
+    if (!ReaderOp.Gate.Wait(0))
+        return Results.Conflict(new { error = "уже идёт операция с ридерами — попробуйте позже" });
+
+    _ = Task.Run(() =>
+    {
+        using var _ = BringUpStatus.Begin();
+        try
+        {
+            ReaderOp.FileLog($"=== rebind-all (серийная привязка {targets.Count} УТМ по токенам) ===");
+            var r = BootBringUp.Apply(targets, ReaderOp.FileLog);
+            // Сохраняем фактически наблюдённые имена ридеров — на новой машине они другие,
+            // а без корректного ReaderName последующие introduce-перезапуски/лечение сломаются.
+            if (r.ReaderBySerial.Count > 0)
+            {
+                var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+                bool changed = false;
+                foreach (var i in st.Instances)
+                {
+                    if (!string.IsNullOrEmpty(i.TokenSerial)
+                        && r.ReaderBySerial.TryGetValue(i.TokenSerial!, out var rn)
+                        && !string.Equals(i.ReaderName, rn, StringComparison.OrdinalIgnoreCase))
+                    { i.ReaderName = rn; changed = true; }
+                }
+                if (changed) { st.Save(OrchestratorState.DefaultPath); ReaderOp.FileLog("rebind-all: имена ридеров обновлены в state.json"); }
+            }
+            ReaderOp.FileLog($"rebind-all: поднято {r.Started.Count}, ошибок {r.Failed.Count}");
+        }
+        catch (Exception e) { ReaderOp.FileLog($"rebind-all: СБОЙ — {e}"); }
+        finally { ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true, count = targets.Count });
 });
 
 // --- Полечить токены: рестарт SCardSvr (будит замёрзшие) + introduce-подъём всех ---
