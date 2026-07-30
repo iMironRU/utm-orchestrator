@@ -1,5 +1,6 @@
 using System.Net.Http;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace UtmOrchestrator.Core.Egais;
@@ -81,19 +82,38 @@ public static class UtmQueries
     /// </summary>
     public static async Task<(int Incoming, int Outgoing)> QueueCountsAsync(int port, CancellationToken ct = default)
     {
-        int inc = await CountUrlsAsync($"http://127.0.0.1:{port}/opt/out", ct).ConfigureAwait(false);
-        int outg = await CountUrlsAsync($"http://127.0.0.1:{port}/opt/in", ct).ConfigureAwait(false);
+        // Входящие: только НАСТОЯЩИЕ документы из /opt/out (накладные и т.п.), БЕЗ квитанций
+        // (Ticket) и ответов на запросы (Reply*) — их УТМ во «входящих» не показывает.
+        int inc = await CountAsync($"http://127.0.0.1:{port}/opt/out", filterTypes: true, ct).ConfigureAwait(false);
+        // Исходящие: всё, что подано в УТМ и ещё не отправлено.
+        int outg = await CountAsync($"http://127.0.0.1:{port}/opt/in", filterTypes: false, ct).ConfigureAwait(false);
         return (inc, outg);
     }
 
-    private static async Task<int> CountUrlsAsync(string url, CancellationToken ct)
+    // Тип документа — сегмент после /opt/out/ или /opt/in/ в ссылке: .../opt/out/{Тип}/{id}
+    private static readonly Regex UrlType = new(@"/opt/(?:out|in)/([A-Za-z0-9_]+)/", RegexOptions.Compiled);
+
+    private static async Task<int> CountAsync(string url, bool filterTypes, CancellationToken ct)
     {
         try
         {
             string body = await _http.GetStringAsync(url, ct).ConfigureAwait(false);
-            int n = 0, i = 0;
-            while ((i = body.IndexOf("<url", i, StringComparison.Ordinal)) >= 0) { n++; i += 4; }
-            return n;
+            if (!filterTypes)
+            {
+                int n = 0, i = 0;
+                while ((i = body.IndexOf("<url", i, StringComparison.Ordinal)) >= 0) { n++; i += 4; }
+                return n;
+            }
+            int count = 0;
+            foreach (Match m in UrlType.Matches(body))
+            {
+                string type = m.Groups[1].Value;
+                // Квитанции и ответы на запросы — не «входящие документы».
+                if (type.Equals("Ticket", StringComparison.OrdinalIgnoreCase)) continue;
+                if (type.StartsWith("Reply", StringComparison.OrdinalIgnoreCase)) continue;
+                count++;
+            }
+            return count;
         }
         catch { return -1; }
     }
