@@ -179,6 +179,8 @@
         name: inst.title || inst.service || ('УТМ ' + (inst.port || '')),
         customName: inst.name || '',
         org: inst.org || '',
+        entity: inst.entity || '',   // юрлицо/владелец (ООО или ФИО ИП)
+        inn: inst.inn || '',         // ИНН — для показа и группировки
         fsrar: inst.fsrar || null,
         tokenSerial: inst.serial || null,
         status: st,
@@ -230,6 +232,7 @@
     return {
       id: u.id, name: u.name, port: u.port, service: u.service || '',
       customName: u.customName || '', org: u.org || '',
+      entity: u.entity || '', inn: u.inn || '',
       fsrarDisplay: u.fsrar || '—',
       tokenDisplay: u.tokenSerial ? ('Rutoken · ' + u.tokenSerial) : 'нет токена',
       tokenSerial: u.tokenSerial,
@@ -533,8 +536,37 @@
         : '<button data-action="toggleSelectMode" style="' + btnGhost(c) + 'margin-left:auto;">Выбрать несколько</button>') +
     '</div>';
 
-    var cards = shown.map(function (u) { return overviewCard(u, c, selMode, utmIsSelected(u)); }).join('');
-    var grid = '<div style="display:grid;grid-template-columns:' + gridCols + ';gap:16px;">' + cards + '</div>';
+    function cardGrid(listv) {
+      return '<div style="display:grid;grid-template-columns:' + gridCols + ';gap:16px;">' +
+        listv.map(function (u) { return overviewCard(u, c, selMode, utmIsSelected(u)); }).join('') + '</div>';
+    }
+    // Группировка по юрлицу (ключ — ИНН, иначе имя юрлица). Заголовки групп показываем,
+    // только когда юрлиц больше одного — иначе лишний шум на однофирменной машине.
+    var groups = {}, order = [];
+    shown.forEach(function (v) {
+      var k = v.inn || v.entity || '—';
+      if (!groups[k]) { groups[k] = []; order.push(k); }
+      groups[k].push(v);
+    });
+    order.sort(function (a, b) {
+      return ('' + (groups[a][0].entity || a)).localeCompare('' + (groups[b][0].entity || b), 'ru');
+    });
+    var grid;
+    if (order.length > 1) {
+      grid = '<div style="display:flex;flex-direction:column;gap:18px;">' + order.map(function (k) {
+        var g = groups[k], h = g[0];
+        var label = (h.entity || 'Юрлицо не определено') + (h.inn ? ' · ИНН ' + h.inn : '');
+        return '<div style="display:flex;flex-direction:column;gap:12px;">' +
+            '<div style="display:flex;align-items:center;gap:10px;">' +
+              '<div style="font:700 13px system-ui,sans-serif;color:' + c.textSecondary + ';white-space:nowrap;">' + esc(label) + '</div>' +
+              '<div style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';white-space:nowrap;">· ' + g.length + ' УТМ</div>' +
+              '<div style="flex:1;height:1px;background:' + c.border + ';"></div>' +
+            '</div>' + cardGrid(g) +
+          '</div>';
+      }).join('') + '</div>';
+    } else {
+      grid = cardGrid(shown);
+    }
 
     // Плавающая панель групповых действий — когда что-то выбрано.
     var actionBar = (selMode && selCount)
@@ -606,6 +638,14 @@
           (checked ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 6" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '') +
         '</div>';
     }
+    // Юрлицо/ИНН под названием — показываем всегда (даже при кастомной подписи), чтобы
+    // различать УТМ разных юрлиц на одной машине. Юрлицо прячем, если оно и есть название.
+    var idBits = [];
+    if (u.entity && u.entity !== u.name) idBits.push(esc(u.entity));
+    if (u.inn) idBits.push('ИНН ' + esc(u.inn));
+    var idLine = idBits.length
+      ? '<div style="font:11.5px system-ui,sans-serif;color:' + c.textTertiary + ';">' + idBits.join(' · ') + '</div>'
+      : '';
     // Подсказка, почему плитку нельзя выбрать (когда в режиме выбора и есть документы).
     var docHint = blocked
       ? '<div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';">Есть документы — выбор недоступен, обработайте их или дождитесь обмена</div>'
@@ -623,6 +663,7 @@
       '<div style="display:flex;flex-direction:column;gap:8px;min-width:0;">' +
         '<div style="display:flex;align-items:center;gap:10px;min-width:0;">' + checkbox +
           '<div style="font:700 15px/1.3 system-ui,sans-serif;color:' + c.textPrimary + ';min-width:0;">' + esc(u.name) + '</div></div>' +
+        idLine +
         '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">' +
           '<div style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">порт ' + esc(u.port) + (u.version ? ' · v' + esc(u.version) : '') + '</div>' +
           statusPill(u, c) +
@@ -711,7 +752,8 @@
 
     var info = '<div style="display:grid;grid-template-columns:' + infoCols + ';gap:12px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
       portCell +
-      infoCell('Организация', sel.org || '—', false) +
+      infoCell('Юрлицо', sel.entity || sel.org || '—', false) +
+      infoCell('ИНН', sel.inn || '—', true) +
       infoCell('Версия УТМ', sel.version, false) +
       infoCell('Папка', sel.folder || '—', true) +
       infoCell('ФСРАР', sel.fsrarDisplay, true) +

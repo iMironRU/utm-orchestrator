@@ -202,6 +202,11 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
 
         string? customName = names.Get(h.Instance.TokenSerial);
         string? orgDisplay = org?.Display;
+        // Юрлицо/владелец: организация (ООО) → ФИО владельца (ИП). Показываем ВСЕГДА, даже
+        // при кастомной подписи — на машине могут быть УТМ разных юрлиц, и по подписи их не
+        // различить. Группировка в интерфейсе — по ИНН.
+        string? entity = !string.IsNullOrWhiteSpace(org?.Organization) ? org!.Organization
+                       : !string.IsNullOrWhiteSpace(org?.PersonName) ? org!.PersonName : null;
         // Заголовок: кастомное имя → орг/адрес → имя службы.
         string title = !string.IsNullOrWhiteSpace(customName) ? customName!
                      : !string.IsNullOrWhiteSpace(orgDisplay) ? orgDisplay!
@@ -230,6 +235,7 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
             name = customName,       // кастомное краткое имя (или null)
             org = orgDisplay,        // адрес/организация из сертификата (или null)
             inn = org?.Inn,
+            entity,                  // юрлицо/владелец (ООО или ФИО ИП) — показываем всегда
             folder = h.Instance.FolderPath,   // папка УТМ
             // Точная версия СБОРКИ (напр. 4.27.668) из SPA-бандла УТМ; запасной вариант
             // — версия формата из /api/info/list (4.2.0).
