@@ -129,8 +129,7 @@
   };
 
   var NAV = [
-    { key: 'overview', label: 'Обзор', action: 'goOverview', icon: ICONS.overview },
-    { key: 'utm', label: 'УТМ', action: 'goUtm', icon: ICONS.utm },
+    { key: 'overview', label: 'УТМ', action: 'goOverview', icon: ICONS.overview },
     { key: 'tokens', label: 'Токены', action: 'goTokens', icon: ICONS.tokens },
     { key: 'install', label: 'Установка', action: 'goInstall', icon: ICONS.install },
     { key: 'updates', label: 'Обновления', action: 'goUpdates', icon: ICONS.updates },
@@ -141,8 +140,8 @@
   /* активность пункта навигации */
   function navActive(key) {
     var s = state.screen;
-    if (key === 'overview') return s === 'overview';
-    if (key === 'utm') return s === 'utm' || s === 'utm-detail';
+    // «Обзор»/«УТМ» объединены в один пункт (key 'overview'): активен и на деталях УТМ.
+    if (key === 'overview') return s === 'overview' || s === 'utm' || s === 'utm-detail';
     return s === key;
   }
   function navStyle(active, c) {
@@ -523,13 +522,35 @@
           '<button data-action="clearOverviewFilter" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:6px 12px;border-radius:7px;font:600 12px system-ui,sans-serif;cursor:pointer;">Сбросить фильтр</button></div>'
       : '';
 
-    var cards = shown.map(function (u) { return overviewCard(u, c); }).join('');
+    // Групповой выбор (подготовка переноса): вкл/выкл + «выбрать все».
+    var selMode = !!state.utmSelectMode;
+    var sel = state.utmSelected || {};
+    var selCount = views.filter(function (v) { return sel[v.service || v.id]; }).length;
+    var selectToolbar = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+      (selMode
+        ? '<span style="font:12.5px system-ui,sans-serif;color:' + c.textTertiary + ';margin-right:auto;">Выбрано ' + selCount + ' из ' + views.length + '</span>' +
+          '<button data-action="selectAllUtms" style="' + btnGhost(c) + '">' + (selCount === views.length && views.length ? 'Снять все' : 'Выбрать все') + '</button>' +
+          '<button data-action="toggleSelectMode" style="' + btnGhost(c) + '">Готово</button>'
+        : '<button data-action="toggleSelectMode" style="' + btnGhost(c) + 'margin-left:auto;">Выбрать несколько</button>') +
+    '</div>';
+
+    var cards = shown.map(function (u) { return overviewCard(u, c, selMode, !!sel[u.service || u.id]); }).join('');
     var grid = '<div style="display:grid;grid-template-columns:' + gridCols + ';gap:16px;">' + cards + '</div>';
 
-    return hero + filterChip + grid;
+    // Плавающая панель групповых действий — когда что-то выбрано.
+    var actionBar = (selMode && selCount)
+      ? '<div style="position:sticky;bottom:0;display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:12px 14px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;box-shadow:0 -3px 14px rgba(0,0,0,.10);">' +
+          '<span style="font:600 12.5px system-ui,sans-serif;color:' + c.textSecondary + ';margin-right:2px;">Выбрано ' + selCount + ':</span>' +
+          '<button data-action="bulkCheckDocs" style="' + btnGhost(c) + '">Проверить документы</button>' +
+          '<button data-action="bulkExport" style="' + btnBrand(c) + '">Экспортировать для переноса</button>' +
+          '<button data-action="bulkStop" style="' + btnDanger(c) + '">Остановить</button>' +
+        '</div>'
+      : '';
+
+    return hero + filterChip + selectToolbar + grid + actionBar;
   }
 
-  function overviewCard(u, c) {
+  function overviewCard(u, c, selMode, checked) {
     var callout = u.hasCallout
       ? '<div style="display:flex;align-items:flex-start;gap:8px;padding:10px 12px;background:' + u.statusBg + ';border-radius:8px;">' +
           '<div style="width:6px;height:6px;border-radius:50%;background:' + u.statusColor + ';margin-top:5px;flex-shrink:0;"></div>' +
@@ -573,21 +594,31 @@
         '</span></div>';
     }
     exchange = exchange + queueLine;
-    // Вся плитка кликабельна → карточка УТМ. Внутренние ссылки перехватывают клик
-    // сами (делегирование берёт ближайший [data-action]), так что они остаются рабочими.
-    return '<div data-action="openUtm" data-id="' + esc(u.id) + '" title="Открыть карточку УТМ" style="min-width:0;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:10px;padding:18px 18px 14px;display:flex;flex-direction:column;gap:12px;cursor:pointer;">' +
+    var key = u.service || u.id;
+    var cardAction = selMode ? 'toggleSelectUtm' : 'openUtm';
+    var checkbox = selMode
+      ? '<div style="width:20px;height:20px;border-radius:5px;border:2px solid ' + (checked ? c.brand : c.borderStrong) + ';background:' + (checked ? c.brand : 'transparent') + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
+          (checked ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 6" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '') +
+        '</div>'
+      : '';
+    // В режиме выбора нижние ссылки-действия скрываем — вся плитка = переключатель выбора.
+    var footer = selMode ? ''
+      : '<div style="display:flex;gap:14px;padding-top:8px;border-top:1px solid ' + c.border + ';flex-wrap:wrap;">' +
+          '<a data-action="utmPrimary" data-name="' + esc(u.name) + '" data-service="' + esc(u.service) + '" data-label="' + esc(u.primaryLabel) + '" style="font:600 12px system-ui,sans-serif;color:' + c.brand + ';cursor:pointer;">' + esc(u.primaryLabel) + '</a>' +
+          '<a data-action="openUtmWeb" data-port="' + esc(u.port) + '" style="font:600 12px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">Открыть УТМ ↗</a>' +
+          '<a data-action="openUtm" data-id="' + esc(u.id) + '" style="font:600 12px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">Подробнее</a>' +
+        '</div>';
+    // Вся плитка кликабельна: обычно → карточка УТМ, в режиме выбора → переключение выбора.
+    return '<div data-action="' + cardAction + '" data-id="' + esc(u.id) + '" data-service="' + esc(key) + '" title="' + (selMode ? 'Выбрать/снять' : 'Открыть карточку УТМ') + '" style="min-width:0;background:' + (checked ? c.brandBg : c.cardBg) + ';border:1px solid ' + (checked ? c.brand : c.border) + ';border-radius:10px;padding:18px 18px 14px;display:flex;flex-direction:column;gap:12px;cursor:pointer;">' +
       '<div style="display:flex;flex-direction:column;gap:8px;min-width:0;">' +
-        '<div style="font:700 15px/1.3 system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(u.name) + '</div>' +
+        '<div style="display:flex;align-items:center;gap:10px;min-width:0;">' + checkbox +
+          '<div style="font:700 15px/1.3 system-ui,sans-serif;color:' + c.textPrimary + ';min-width:0;">' + esc(u.name) + '</div></div>' +
         '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">' +
           '<div style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">порт ' + esc(u.port) + (u.version ? ' · v' + esc(u.version) : '') + '</div>' +
           statusPill(u, c) +
         '</div></div>' +
-      callout + metaBlock + progress + exchange +
-      '<div style="display:flex;gap:14px;padding-top:8px;border-top:1px solid ' + c.border + ';flex-wrap:wrap;">' +
-        '<a data-action="utmPrimary" data-name="' + esc(u.name) + '" data-service="' + esc(u.service) + '" data-label="' + esc(u.primaryLabel) + '" style="font:600 12px system-ui,sans-serif;color:' + c.brand + ';cursor:pointer;">' + esc(u.primaryLabel) + '</a>' +
-        '<a data-action="openUtmWeb" data-port="' + esc(u.port) + '" style="font:600 12px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">Открыть УТМ ↗</a>' +
-        '<a data-action="openUtm" data-id="' + esc(u.id) + '" style="font:600 12px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">Подробнее</a>' +
-      '</div></div>';
+      callout + metaBlock + progress + exchange + footer +
+    '</div>';
   }
 
   /* ====================== ЭКРАН: ПУСТОЕ СОСТОЯНИЕ ====================== */
@@ -599,64 +630,6 @@
       '<div style="font:13.5px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';max-width:360px;">УТМ ещё не установлены на этом компьютере. Запустите мастер, чтобы добавить первый.</div>' +
       '<button data-action="goInstall" style="margin-top:6px;background:' + c.brand + ';border:none;color:#fff;padding:12px 22px;border-radius:9px;font:600 14px system-ui,sans-serif;cursor:pointer;">Установить УТМ</button>' +
     '</div>';
-  }
-
-  /* ====================== ЭКРАН: УТМ — СПИСОК ====================== */
-  function utmListScreen(c) {
-    if (!dataLoaded()) return loadingCard(c);
-    var views = utmSource().map(function (u) { return buildUtmView(u, c); });
-    var selMode = !!state.utmSelectMode;
-    var sel = state.utmSelected || {};
-    var selCount = views.filter(function (v) { return sel[v.service || v.id]; }).length;
-
-    // Тулбар: включить/выключить режим выбора + «выбрать все».
-    var toolbar = '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">' +
-      '<div style="font:12.5px system-ui,sans-serif;color:' + c.textTertiary + ';">' + views.length + ' УТМ' + (selMode && selCount ? ' · выбрано ' + selCount : '') + '</div>' +
-      '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-        (selMode
-          ? '<button data-action="selectAllUtms" style="' + btnGhost(c) + '">' + (selCount === views.length && views.length ? 'Снять все' : 'Выбрать все') + '</button>' +
-            '<button data-action="toggleSelectMode" style="' + btnGhost(c) + '">Готово</button>'
-          : '<button data-action="toggleSelectMode" style="' + btnGhost(c) + '">Выбрать несколько</button>') +
-      '</div></div>';
-
-    var rows = views.map(function (v) {
-      var key = v.service || v.id;
-      var checked = !!sel[key];
-      var rowAction = selMode ? 'toggleSelectUtm' : 'openUtm';
-      var checkbox = selMode
-        ? '<div style="width:20px;height:20px;border-radius:5px;border:2px solid ' + (checked ? c.brand : c.borderStrong) + ';background:' + (checked ? c.brand : 'transparent') + ';display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
-            (checked ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 6" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '') +
-          '</div>'
-        : '';
-      // Короткий бейдж очереди — чтобы прямо в списке видеть, где есть документы.
-      var q = v.queue, qBadge = '';
-      if (q && (q.incoming > 0 || q.outgoing > 0)) {
-        qBadge = '<span style="font:11px system-ui,sans-serif;color:' + c.error + ';white-space:nowrap;">вх ' + (q.incoming > 0 ? q.incoming : 0) + ' · исх ' + (q.outgoing > 0 ? q.outgoing : 0) + '</span>';
-      }
-      return '<div data-action="' + rowAction + '" data-id="' + esc(v.id) + '" data-service="' + esc(key) + '" style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;background:' + (checked ? c.brandBg : c.cardBg) + ';border:1px solid ' + (checked ? c.brand : c.border) + ';border-radius:10px;cursor:pointer;flex-wrap:wrap;">' +
-        '<div style="display:flex;align-items:center;gap:14px;min-width:0;">' +
-          checkbox +
-          '<div style="width:9px;height:9px;border-radius:50%;background:' + v.statusColor + ';flex-shrink:0;' + v.dotAnim + '"></div>' +
-          '<div style="min-width:0;"><div style="font:700 14.5px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(v.name) + '</div>' +
-          '<div style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';margin-top:2px;">порт ' + esc(v.port) + ' · ФСРАР ' + esc(v.fsrarDisplay) + (v.version ? ' · v' + esc(v.version) : '') + '</div></div>' +
-        '</div>' +
-        '<div style="display:flex;align-items:center;gap:10px;flex-shrink:0;">' + qBadge +
-          '<div style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:20px;background:' + v.statusBg + ';"><span style="font:600 12px system-ui,sans-serif;color:' + v.statusColor + ';">' + esc(v.statusLabel) + '</span></div>' +
-        '</div>' +
-      '</div>';
-    }).join('');
-
-    // Плавающая панель групповых действий — видна, когда что-то выбрано.
-    var actionBar = (selMode && selCount)
-      ? '<div style="position:sticky;bottom:0;display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:12px 14px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;box-shadow:0 -3px 14px rgba(0,0,0,.10);margin-top:2px;">' +
-          '<span style="font:600 12.5px system-ui,sans-serif;color:' + c.textSecondary + ';margin-right:2px;">Выбрано ' + selCount + ':</span>' +
-          '<button data-action="bulkCheckDocs" style="' + btnGhost(c) + '">Проверить документы</button>' +
-          '<button data-action="bulkExport" style="' + btnBrand(c) + '">Экспортировать для переноса</button>' +
-          '<button data-action="bulkStop" style="' + btnDanger(c) + '">Остановить</button>' +
-        '</div>'
-      : '';
-
-    return '<div style="display:flex;flex-direction:column;gap:10px;">' + toolbar + rows + actionBar + '</div>';
   }
 
   /* Выбранные УТМ (сырые модели) — для групповых действий. Ключ выбора = служба или id. */
@@ -1433,7 +1406,7 @@
   function screenContent(c) {
     var s = state.screen;
     if (s === 'overview') return overviewScreen(c);
-    if (s === 'utm') return utmListScreen(c);
+    if (s === 'utm') return overviewScreen(c); // объединено: старый маршрут «УТМ» → тот же экран
     if (s === 'utm-detail') return utmDetailScreen(c);
     if (s === 'tokens') return tokensScreen(c);
     if (s === 'install') return installScreen(c);
@@ -1652,7 +1625,7 @@
   var actions = {
     /* навигация */
     goOverview: function () { setScreen('overview'); },
-    goUtm: function () { setScreen('utm'); },
+    goUtm: function () { setScreen('overview'); }, // «УТМ» и «Обзор» объединены
     goTokens: function () { setScreen('tokens'); },
     goUpdates: function () { setScreen('updates'); loadUpdateInfo(); },
     checkUpdatesAgain: function () { loadUpdateInfo(); },
