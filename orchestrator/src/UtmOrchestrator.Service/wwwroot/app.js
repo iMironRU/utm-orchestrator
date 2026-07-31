@@ -502,7 +502,7 @@
     var heroDir = isMobile ? 'column' : 'row';
     var heroW = isMobile ? '100%' : 'auto';
     var btnW = isMobile ? '100%' : 'auto';
-    var gridCols = isMobile ? '1fr' : 'repeat(auto-fit,minmax(250px,1fr))';
+    var gridCols = isMobile ? '1fr' : 'repeat(auto-fit,minmax(300px,1fr))';
 
     var subtitleHTML = canFilter
       ? '<span data-action="filterProblems" style="cursor:pointer;text-decoration:underline;color:' + heroColor + ';font-weight:600;">' + esc(heroSubtitle) + '</span>'
@@ -582,47 +582,11 @@
   }
 
   function overviewCard(u, c, selMode, checked) {
-    var callout = u.hasCallout
-      ? '<div style="display:flex;align-items:flex-start;gap:8px;padding:10px 12px;background:' + u.statusBg + ';border-radius:8px;">' +
-          '<div style="width:6px;height:6px;border-radius:50%;background:' + u.statusColor + ';margin-top:5px;flex-shrink:0;"></div>' +
-          '<div style="font:12.5px/1.5 system-ui,sans-serif;color:' + u.statusColor + ';">' + esc(u.reasonText) + '</div></div>'
-      : '';
-    var progress = u.isProgress
-      ? '<div style="display:flex;flex-direction:column;gap:6px;padding:10px 12px;background:' + u.statusBg + ';border-radius:8px;">' +
-          '<div style="font:12.5px system-ui,sans-serif;color:' + u.statusColor + ';">' + esc(u.progressLabel) + '</div>' +
-          '<div style="height:6px;border-radius:3px;background:' + u.progressTrack + ';overflow:hidden;"><div style="height:100%;width:' + u.progress + '%;background:' + u.statusColor + ';border-radius:3px;"></div></div>' +
-          '<div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';">' + u.progress + '% · осталось ~2 мин</div></div>'
-      : '';
-    // Индикатор обмена по факту: зелёный — идёт, тревожный — стоит (даже если УТМ «зелёный»).
-    var exColor = u.exchange ? (u.exchangeLive ? c.ok : c.warn) : u.statusColor;
-    var exTextColor = (u.exchange && !u.exchangeLive) ? c.warn : c.textSecondary;
-    var exchange = u.hasExchange
-      ? '<div style="display:flex;align-items:center;gap:6px;">' +
-          '<div style="width:6px;height:6px;border-radius:50%;background:' + exColor + ';flex-shrink:0;"></div>' +
-          '<span style="font:12px system-ui,sans-serif;color:' + exTextColor + ';">' + esc(u.exchangeText) + '</span></div>'
-      : '';
-    // Очереди документов: входящие (из ЕГАИС, ждут забора) и исходящие (не отправлены).
-    // Есть документы (>0) — КРАСНЫМ, чтобы сразу бросалось в глаза; пусто — зелёным.
-    var queueLine = '';
-    if (u.hasExchange && u.queue && (u.queue.incoming >= 0 || u.queue.outgoing >= 0)) {
-      var inc = u.queue.incoming, outg = u.queue.outgoing;
-      var any = inc > 0 || outg > 0;
-      function cnt(n) {
-        var col = n < 0 ? c.textTertiary : (n > 0 ? c.error : c.ok);
-        var val = n < 0 ? '—' : n;
-        return '<b style="color:' + col + ';">' + val + '</b>';
-      }
-      queueLine = '<div style="display:flex;align-items:center;gap:6px;">' +
-        '<div style="width:6px;height:6px;border-radius:50%;background:' + (any ? c.error : c.ok) + ';flex-shrink:0;"></div>' +
-        '<span style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">' +
-          'Входящих: ' + cnt(inc) + ' · исходящих: ' + cnt(outg) +
-          (outg > 0 ? ' <span style="color:' + c.error + ';font-weight:600;">— не отправлены в ЕГАИС!</span>' : '') +
-        '</span></div>';
-    }
-    exchange = exchange + queueLine;
     var key = u.service || u.id;
     var blocked = selMode && utmHasDocs(u); // с документами выбор недоступен
     var cardAction = !selMode ? 'openUtm' : (blocked ? 'selUtmBlocked' : 'toggleSelectUtm');
+    var divider = '<div style="border-top:1px solid ' + c.border + ';"></div>';
+
     var checkbox = '';
     if (selMode && blocked) {
       // Замок вместо чекбокса — плитку с документами выбрать нельзя.
@@ -633,42 +597,78 @@
           (checked ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 6" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '') +
         '</div>';
     }
-    // Юрлицо и ИНН — отдельными строками, показываем всегда (даже при кастомной подписи),
-    // чтобы различать УТМ разных юрлиц. Юрлицо прячем, если оно и есть название.
-    var entityLine = (u.entity && u.entity !== u.name)
-      ? '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(u.entity) + '</div>'
-      : '';
-    var innLine = u.inn
-      ? '<div style="font:11.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">ИНН ' + esc(u.inn) + '</div>'
-      : '';
-    // Второстепенное — одной приглушённой строкой (вместо боксов): порт · версия · ФСРАР.
-    var metaParts = ['порт ' + esc(u.port)];
-    if (u.version && u.version !== '—') metaParts.push('v' + esc(u.version));
-    if (u.fsrarDisplay && u.fsrarDisplay !== '—') metaParts.push('ФСРАР ' + esc(u.fsrarDisplay));
-    var metaLine = '<div style="font:11.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">' + metaParts.join(' · ') + '</div>';
-    // Подсказка, почему плитку нельзя выбрать (когда в режиме выбора и есть документы).
-    var docHint = blocked
-      ? '<div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';">Есть документы — выбор недоступен, обработайте их или дождитесь обмена</div>'
-      : '';
-    // В режиме выбора нижние ссылки-действия скрываем — вся плитка = переключатель выбора.
-    var footer = selMode ? ''
-      : '<div style="display:flex;gap:14px;padding-top:8px;border-top:1px solid ' + c.border + ';flex-wrap:wrap;">' +
-          '<a data-action="utmPrimary" data-name="' + esc(u.name) + '" data-service="' + esc(u.service) + '" data-label="' + esc(u.primaryLabel) + '" style="font:600 12px system-ui,sans-serif;color:' + c.brand + ';cursor:pointer;">' + esc(u.primaryLabel) + '</a>' +
-          '<a data-action="openUtmWeb" data-port="' + esc(u.port) + '" style="font:600 12px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">Открыть УТМ ↗</a>' +
-          '<a data-action="openUtm" data-id="' + esc(u.id) + '" style="font:600 12px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">Подробнее</a>' +
+
+    // --- Идентификация (одинаковая структура на всех плитках, чтобы не «прыгали») ---
+    // Заголовок = подпись; если не задана — серый placeholder «Наименование» + карандаш
+    // (клик открывает карточку, где название редактируется).
+    var titleInner = u.customName
+      ? '<span style="color:' + c.textPrimary + ';">' + esc(u.customName) + '</span>'
+      : '<span style="color:' + c.textTertiary + ';">Наименование</span>';
+    var pencil = selMode ? ''
+      : '<span data-action="openUtm" data-id="' + esc(u.id) + '" title="Изменить название" style="flex-shrink:0;display:inline-flex;align-items:center;cursor:pointer;color:' + c.textTertiary + ';">' +
+          '<svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M4 20h4L18.5 9.5a2.12 2.12 0 00-3-3L5 17v3z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
+    var titleRow = '<div style="display:flex;align-items:center;gap:8px;min-width:0;">' + checkbox +
+        '<div style="flex:1;min-width:0;font:700 15px/1.3 system-ui,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + titleInner + '</div>' +
+        pencil + statusPill(u, c) +
+      '</div>';
+    var monoLine = 'font:11.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';';
+    var identity = '<div style="display:flex;flex-direction:column;gap:3px;min-width:0;">' +
+        titleRow +
+        '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(u.entity || u.org || '—') + '</div>' +
+        '<div style="' + monoLine + '">ИНН ' + esc(u.inn || '—') + '</div>' +
+        '<div style="' + monoLine + '">ФСРАР ' + esc(u.fsrarDisplay || '—') + '</div>' +
+        '<div style="' + monoLine + '">порт ' + esc(u.port) + (u.version && u.version !== '—' ? ' · v' + esc(u.version) : '') + '</div>' +
+      '</div>';
+
+    // --- Обмен / документы ---
+    var mid;
+    if (u.isProgress) {
+      mid = '<div style="display:flex;flex-direction:column;gap:6px;">' +
+          '<div style="font:12px system-ui,sans-serif;color:' + u.statusColor + ';">' + esc(u.progressLabel) + '</div>' +
+          '<div style="height:6px;border-radius:3px;background:' + u.progressTrack + ';overflow:hidden;"><div style="height:100%;width:' + u.progress + '%;background:' + u.statusColor + ';border-radius:3px;"></div></div>' +
         '</div>';
-    // Вся плитка кликабельна: обычно → карточка УТМ; в режиме выбора → переключение выбора
-    // (кроме плиток с документами — они заблокированы).
-    return '<div data-action="' + cardAction + '" data-id="' + esc(u.id) + '" data-service="' + esc(key) + '" title="' + (selMode ? (blocked ? 'Есть документы — выбор недоступен' : 'Выбрать/снять') : 'Открыть карточку УТМ') + '" style="min-width:0;background:' + (checked ? c.brandBg : c.cardBg) + ';border:1px solid ' + (checked ? c.brand : c.border) + ';border-radius:10px;padding:16px 16px 12px;display:flex;flex-direction:column;gap:11px;cursor:' + (blocked ? 'not-allowed' : 'pointer') + ';' + (blocked ? 'opacity:.85;' : '') + '">' +
-      // Блок идентификации: имя + статус (в строке), под ним юрлицо, ИНН, порт·версия·ФСРАР.
-      '<div style="display:flex;flex-direction:column;gap:3px;min-width:0;">' +
-        '<div style="display:flex;align-items:center;gap:10px;min-width:0;">' + checkbox +
-          '<div style="flex:1;min-width:0;font:700 15px/1.3 system-ui,sans-serif;color:' + c.textPrimary + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(u.name) + '</div>' +
-          statusPill(u, c) +
-        '</div>' +
-        entityLine + innLine + metaLine +
-      '</div>' +
-      callout + progress + exchange + docHint + footer +
+    } else {
+      var exAgo = (u.exchange && u.exchange.agoSeconds != null) ? u.exchange.agoSeconds : null;
+      var exText, exCol;
+      if (exAgo != null) { exText = u.exchangeLive ? 'Обмен с ЕГАИС идёт' : 'Обмен с ЕГАИС не идёт'; exCol = u.exchangeLive ? c.ok : c.warn; }
+      else if (u.status === 'ok') { exText = 'Обмен с ЕГАИС идёт'; exCol = c.ok; }
+      else if (u.status === 'warn') { exText = u.reasonText || 'Обмен приостановлен'; exCol = c.warn; }
+      else if (u.status === 'error') { exText = u.reasonText || 'Обмен остановлен'; exCol = c.error; }
+      else if (u.status === 'stopped') { exText = 'Остановлен'; exCol = c.stopped; }
+      else { exText = 'Нет данных'; exCol = c.textTertiary; }
+
+      var q = u.queue;
+      var inc = q ? q.incoming : null, outg = q ? q.outgoing : null;
+      function cnt(n) {
+        var col = (n == null || n < 0) ? c.textTertiary : (n > 0 ? c.error : c.ok);
+        return '<b style="color:' + col + ';">' + ((n == null || n < 0) ? '—' : n) + '</b>';
+      }
+      var anyDocs = (inc > 0 || outg > 0);
+      var lastTxt = exAgo != null ? fmtSecs(exAgo) + ' назад' : '—';
+      mid = '<div style="display:flex;flex-direction:column;gap:5px;">' +
+          '<div style="display:flex;align-items:center;gap:6px;"><span style="width:7px;height:7px;border-radius:50%;background:' + exCol + ';flex-shrink:0;"></span>' +
+            '<span style="font:12px system-ui,sans-serif;color:' + exCol + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(exText) + '</span></div>' +
+          '<div style="display:flex;align-items:center;gap:6px;"><span style="width:7px;height:7px;border-radius:50%;background:' + (anyDocs ? c.error : c.ok) + ';flex-shrink:0;"></span>' +
+            '<span style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';"><span style="color:' + c.textTertiary + ';">↓</span> Вход: ' + cnt(inc) + ' &nbsp;<span style="color:' + c.textTertiary + ';">↑</span> Исход: ' + cnt(outg) + '</span></div>' +
+          '<div style="font:11.5px system-ui,sans-serif;color:' + c.textTertiary + ';padding-left:13px;">Последний обмен: ' + esc(lastTxt) + '</div>' +
+        '</div>';
+    }
+
+    var docHint = blocked
+      ? '<div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';">Есть документы — выбор недоступен</div>'
+      : '';
+
+    // --- Действия: Открыть · Подробнее · <контекстное> — в одну строку без переносов ---
+    var footer = selMode ? ''
+      : '<div style="display:flex;gap:14px;white-space:nowrap;overflow:hidden;">' +
+          '<a data-action="openUtmWeb" data-port="' + esc(u.port) + '" style="font:600 12px system-ui,sans-serif;color:' + c.brand + ';cursor:pointer;">Открыть ↗</a>' +
+          '<a data-action="openUtm" data-id="' + esc(u.id) + '" style="font:600 12px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">Подробнее</a>' +
+          '<a data-action="utmPrimary" data-name="' + esc(u.name) + '" data-service="' + esc(u.service) + '" data-label="' + esc(u.primaryLabel) + '" style="font:600 12px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">' + esc(u.primaryLabel) + '</a>' +
+        '</div>';
+
+    // Вся плитка кликабельна: обычно → карточка УТМ; в режиме выбора → переключение выбора.
+    return '<div data-action="' + cardAction + '" data-id="' + esc(u.id) + '" data-service="' + esc(key) + '" title="' + (selMode ? (blocked ? 'Есть документы — выбор недоступен' : 'Выбрать/снять') : 'Открыть карточку УТМ') + '" style="min-width:0;background:' + (checked ? c.brandBg : c.cardBg) + ';border:1px solid ' + (checked ? c.brand : c.border) + ';border-radius:10px;padding:14px 14px 12px;display:flex;flex-direction:column;gap:10px;cursor:' + (blocked ? 'not-allowed' : 'pointer') + ';' + (blocked ? 'opacity:.85;' : '') + '">' +
+      identity + divider + mid + docHint + (selMode ? '' : divider) + footer +
     '</div>';
   }
 
