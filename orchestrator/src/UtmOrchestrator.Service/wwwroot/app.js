@@ -2308,7 +2308,6 @@
       var list = document.getElementById('logs-list');
       if (list) list.innerHTML = logsListHTML(colors());
     },
-    downloadLogs: function () { notReady('Экспорт логов'); },
 
     /* настройки безопасности — тумблеры меняют только state, сохраняет «Сохранить» */
     setAuthReqOn: function () { setState({ requireAuth: true }); },
