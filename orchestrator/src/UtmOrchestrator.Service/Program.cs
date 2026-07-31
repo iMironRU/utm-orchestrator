@@ -165,6 +165,31 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
         });
     }
 
+    // Быстрый путь для длинной операции (установка/привязка): отдаём живой прогресс из
+    // OpProgress БЕЗ HTTP-опроса УТМ — панель показывает «ставлю N/M: … — фаза», а не «ждите».
+    var opNow = OpProgress.Get();
+    if (opNow.Active)
+    {
+        var st = UtmOrchestrator.Core.State.OrchestratorState.Load(
+            UtmOrchestrator.Core.State.OrchestratorState.DefaultPath);
+        var opList = st.Instances.Select(i => (object)new
+        {
+            service = i.ServiceName, port = i.Port, verdict = "Starting", ok = false,
+            title = names.Get(i.TokenSerial) ?? i.ServiceName, reason = "Идёт установка…",
+        }).ToList();
+        return Results.Json(new
+        {
+            total = st.Instances.Count,
+            ok = 0,
+            faulty = 0,
+            bringUp = true,
+            op = new { active = true, title = opNow.Title, total = opNow.Total, done = opNow.Done, phase = opNow.Phase, current = opNow.Current },
+            orchestratorVersion = UtmOrchestrator.Core.AppInfo.Version,
+            maxUtms,
+            instances = opList,
+        });
+    }
+
     // scanTokens: false — НЕ трогаем PKCS11 на живых токенах (иначе драйвер роняет
     // процесс). Серийники берём из кэша SerialCache.
     var instances = await UtmDiscovery.DiscoverAsync(ct, scanTokens: false, serials);
@@ -1200,11 +1225,16 @@ app.MapPost("/api/utm/add-all", (AddAllRequest req, SerialCache serials) =>
     _ = Task.Run(() =>
     {
         using var _ = BringUpStatus.Begin();
+        OpProgress.Start("Установка на токены", tokens.Count);
         int done = 0, skipped = 0, failed = 0;
         try
         {
             foreach (var tk in tokens)
             {
+                int processed = done + skipped + failed;
+                string who = string.IsNullOrWhiteSpace(tk.Reader) ? (tk.Serial ?? "токен") : tk.Reader!;
+                OpProgress.Update(processed, "разворачиваю и регистрирую…", who);
+
                 var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
                 if (state.Instances.Count >= maxUtms)
                 { ReaderOp.FileLog($"add-all: достигнут лимит {maxUtms} УТМ — остальные токены пропущены"); break; }
@@ -1232,10 +1262,11 @@ app.MapPost("/api/utm/add-all", (AddAllRequest req, SerialCache serials) =>
                 }
                 else { failed++; ReaderOp.FileLog($"add-all: {tk.Serial} — НЕ УДАЛОСЬ: {r.Message}"); }
             }
+            OpProgress.Update(done + skipped + failed, "готово", null);
             ReaderOp.FileLog($"add-all: готово — поставлено {done}, пропущено {skipped}, ошибок {failed}");
         }
         catch (Exception e) { ReaderOp.FileLog($"add-all: СБОЙ — {e}"); }
-        finally { ReaderOp.Gate.Release(); }
+        finally { OpProgress.Finish(); ReaderOp.Gate.Release(); }
     });
     return Results.Accepted(value: new { ok = true, count = tokens.Count });
 });

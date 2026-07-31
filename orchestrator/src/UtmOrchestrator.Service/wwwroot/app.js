@@ -256,6 +256,33 @@
   function btnBrand(c) { return 'background:' + c.brand + ';border:none;color:#fff;padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;'; }
   function btnDanger(c) { return 'background:transparent;border:1px solid ' + c.error + ';color:' + c.error + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;'; }
 
+  /* Активный прогресс: клиентский (импорт бандлов) или серверный (установка на токены). */
+  function activeProgress() {
+    var co = state.clientOp;
+    if (co && co.active) return co;
+    var so = state.liveStatus && state.liveStatus.op;
+    if (so && so.active) return so;
+    return null;
+  }
+  /* Панель прогресса длинной операции: заголовок, N/M, бар, текущий элемент + фаза. */
+  function progressPanel(c, p) {
+    var total = p.total || 0, done = p.done || 0;
+    var pct = total > 0 ? Math.min(100, Math.round(100 * done / total)) : 0;
+    return '<div style="display:flex;flex-direction:column;gap:10px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.brand + ';border-radius:12px;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">' +
+        '<div style="display:flex;align-items:center;gap:9px;">' +
+          '<span style="width:9px;height:9px;border-radius:50%;background:' + c.brand + ';animation:pulseDot 1.4s ease-in-out infinite;flex-shrink:0;"></span>' +
+          '<span style="font:700 13.5px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(p.title || 'Операция') + '</span>' +
+        '</div>' +
+        '<span style="font:12.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textSecondary + ';">' + done + ' / ' + total + '</span>' +
+      '</div>' +
+      '<div style="height:8px;border-radius:4px;background:' + c.subtleBg + ';overflow:hidden;"><div style="height:100%;width:' + pct + '%;background:' + c.brand + ';border-radius:4px;transition:width .3s ease;"></div></div>' +
+      '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">' +
+        (p.current ? '<b style="color:' + c.textPrimary + ';">' + esc(p.current) + '</b> — ' : '') + esc(p.phase || '') +
+      '</div>' +
+    '</div>';
+  }
+
   function segmented(c, options) {
     // options: [{label, active, action}]
     var btns = options.map(function (o) {
@@ -575,7 +602,9 @@
         '</div>'
       : '';
 
-    return hero + filterChip + selectToolbar + grid + actionBar;
+    var prog = activeProgress();
+    var progHtml = prog ? progressPanel(c, prog) : '';
+    return progHtml + hero + filterChip + selectToolbar + grid + actionBar;
   }
 
   function overviewCard(u, c, selMode, checked) {
@@ -1013,7 +1042,9 @@
       (freeUtm === 0 ? ' — достигнут лимит' : '') +
     '</div>';
 
+    var iprog = activeProgress();
     return '<div style="display:flex;flex-direction:column;gap:16px;">' +
+      (iprog ? progressPanel(c, iprog) : '') +
       twoUtmCard(c) +
       '<div style="display:flex;flex-direction:column;gap:14px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
         '<div style="font:700 15px system-ui,sans-serif;color:' + c.textPrimary + ';">Установка нового УТМ</div>' +
@@ -1662,7 +1693,7 @@
   /* Фаза 2: развернуть выбранные бандлы на указанных локальных портах (по очереди). */
   function commitBundles(rows, i, acc) {
     if (i >= rows.length) {
-      setState({ importStaging: null });
+      setState({ importStaging: null, clientOp: { active: false } });
       showToast('Импорт: успешно ' + acc.ok + ', с ошибкой ' + acc.fail +
         (acc.ok ? ' · вставьте токены и «Привязать все токены»' : ''));
       if (acc.map.length) {
@@ -1674,7 +1705,7 @@
       return;
     }
     var row = rows[i];
-    showToast('Импорт ' + (i + 1) + '/' + rows.length + ': ' + row.name + '…');
+    setState({ clientOp: { active: true, title: 'Импорт бандлов', total: rows.length, done: i, current: row.name, phase: 'загружаю и разворачиваю (~10–20с)…' } });
     fetch('/api/utm/import/commit', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ handle: row.handle, port: row.targetPort }),

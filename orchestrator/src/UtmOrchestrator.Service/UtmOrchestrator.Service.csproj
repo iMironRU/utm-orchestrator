@@ -5,6 +5,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UserSecretsId>dotnet-UtmOrchestrator.Service-d8e4bd71-c246-4a02-9043-d4bea45a9af1</UserSecretsId>
+    <!-- Порядок в папке установки: убрать мусор публикации. Среду выполнения
+         (coreclr/hostfxr/System.*.dll) убрать нельзя — она обязана лежать рядом с exe. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages> <!-- нет папок cs/de/ru/… локализаций фреймворка -->
+    <DebugType Condition="'$(Configuration)'=='Release'">none</DebugType> <!-- нет *.pdb в релизе -->
+    <DebugSymbols Condition="'$(Configuration)'=='Release'">false</DebugSymbols>
+    <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled> <!-- IIS не используем — web.config не нужен -->
   </PropertyGroup>
 
   <ItemGroup>
