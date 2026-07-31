@@ -611,8 +611,7 @@
     var identity = '<div style="display:flex;flex-direction:column;gap:3px;min-width:0;">' +
         titleRow +
         '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(u.entity || u.org || '—') + '</div>' +
-        '<div style="' + monoLine + '">ИНН ' + esc(u.inn || '—') + '</div>' +
-        '<div style="' + monoLine + '">ФСРАР ' + esc(u.fsrarDisplay || '—') + '</div>' +
+        '<div style="' + monoLine + 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">ИНН ' + esc(u.inn || '—') + ' · ФСРАР ' + esc(u.fsrarDisplay || '—') + '</div>' +
         '<div style="' + monoLine + '">порт ' + esc(u.port) + (u.version && u.version !== '—' ? ' · v' + esc(u.version) : '') + '</div>' +
       '</div>';
 
