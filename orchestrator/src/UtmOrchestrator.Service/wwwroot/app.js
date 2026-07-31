@@ -34,6 +34,7 @@
     isMobile: false,               // определяется через matchMedia
     screen: 'overview',            // текущий экран
     selectedUtmId: null,           // выбранный УТМ (id из живого статуса)
+    detailTab: 'transfer',         // вкладка нижней карточки деталей: 'transfer' | 'delete'
     notifOpen: false,
     mobileNavOpen: false,
     confirmDeleteOpen: false,
@@ -761,23 +762,16 @@
     // Реальная перепривязка (introduce на другой токен) — на подходе; пока честная
     // пометка вместо фейкового дропдауна «токен привязан».
     var rebindBlock = (sel.status === 'ok') ? '' :
-      '<div style="padding-top:8px;border-top:1px solid ' + c.border + ';font:12.5px/1.55 system-ui,sans-serif;color:' + c.textSecondary + ';">' +
-        'Перепривязка токена к этому УТМ — <b style="color:' + c.textPrimary + ';">в разработке</b>. Пока используйте «Полечить токены» (перезапуск смарт-карт и подъём) или перезапуск УТМ.' +
-      '</div>';
+      '<div style="font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Перепривязка токена — <b style="color:' + c.textPrimary + ';">в разработке</b>. Пока: «Полечить токены» или перезапуск УТМ.</div>';
 
-    var actions = '<div style="display:flex;flex-direction:column;gap:12px;padding:14px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
-      '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Действия</div>' +
-      '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
-        '<button data-action="utmPrimary" data-name="' + esc(sel.name) + '" data-service="' + esc(sel.service) + '" data-label="' + esc(sel.primaryLabel) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">' + esc(sel.primaryLabel) + '</button>' +
-        '<button data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Открыть УТМ ↗</button>' +
-        '<button data-action="openLogsFor" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Логи УТМ</button>' +
-        '<button data-action="queryUnprocessed" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Запросить необработанные накладные</button>' +
-        // «Остановить» — только для работающего/сбойного (у остановленного нечего останавливать).
-        (sel.status === 'stopped' ? '' :
-          '<button data-action="stopUtm" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="background:transparent;border:1px solid ' + c.error + ';color:' + c.error + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Остановить</button>') +
-      '</div>' +
-      rebindBlock +
-    '</div>';
+    // Действия — строкой в тулбаре наверху (рядом со статусом и «← К списку»).
+    var actBtns =
+      '<button data-action="utmPrimary" data-name="' + esc(sel.name) + '" data-service="' + esc(sel.service) + '" data-label="' + esc(sel.primaryLabel) + '" style="' + btnGhost(c) + '">' + esc(sel.primaryLabel) + '</button>' +
+      '<button data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="' + btnGhost(c) + '">Открыть УТМ ↗</button>' +
+      '<button data-action="openLogsFor" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnGhost(c) + '">Логи УТМ</button>' +
+      '<button data-action="queryUnprocessed" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnGhost(c) + '">Запросить накладные</button>' +
+      (sel.status === 'stopped' ? '' :
+        '<button data-action="stopUtm" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="background:transparent;border:1px solid ' + c.error + ';color:' + c.error + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Остановить</button>');
 
     // --- Порт и брандмауэр ---
     var fwOpen = sel.firewallOpen;
@@ -839,30 +833,40 @@
             '<a href="/api/exports/download?name=' + encodeURIComponent(b.name) + '" style="font:600 12px system-ui,sans-serif;color:' + c.brand + ';text-decoration:none;">Скачать ↓</a></div>';
         }).join('')
       : '';
-    var transferCard = '<div style="display:flex;flex-direction:column;gap:12px;padding:14px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
-      '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Перенос на другой компьютер</div>' +
+    // --- Перенос / Удаление — одна карточка с переключателем ---
+    var tab = state.detailTab === 'delete' ? 'delete' : 'transfer';
+    var switcher = segmented(c, [
+      { label: 'Перенос', active: tab === 'transfer', action: 'detailTabTransfer' },
+      { label: 'Удаление', active: tab === 'delete', action: 'detailTabDelete' },
+    ]);
+    var transferBody =
       '<div style="font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Экспорт УТМ целиком (софт + база + служба) в файл. Перенесите файл <b>и токен</b> на новый ПК и импортируйте. Источник не меняется.</div>' +
-      '<div><button data-action="exportUtm" data-service="' + esc(sel.service) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Экспортировать для переноса</button></div>' +
-      bundleList +
+      '<div><button data-action="exportUtm" data-service="' + esc(sel.service) + '" style="' + btnGhost(c) + '">Экспортировать для переноса</button></div>' +
+      bundleList;
+    var deleteBody =
+      '<div style="font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Необратимо: настройки и привязка токена будут удалены. Софт и база УТМ на диске останутся.</div>' +
+      '<div><button data-action="openDeleteConfirm" style="background:' + c.error + ';border:none;color:#fff;padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Удалить УТМ</button></div>';
+    var comboCard = '<div style="display:flex;flex-direction:column;gap:11px;padding:14px;background:' + c.cardBg + ';border:1px solid ' + (tab === 'delete' ? c.error : c.border) + ';border-radius:12px;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">' +
+        '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">' + (tab === 'delete' ? 'Удаление УТМ' : 'Перенос на другой компьютер') + '</div>' +
+        switcher +
+      '</div>' +
+      (tab === 'delete' ? deleteBody : transferBody) +
     '</div>';
-
-    var danger = '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:' + c.errorSoftBg + ';border:1px solid ' + c.error + ';border-radius:12px;flex-wrap:wrap;gap:10px;">' +
-      '<div><div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Удалить УТМ</div>' +
-      '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:2px;">Необратимо: настройки и привязка токена будут удалены</div></div>' +
-      '<button data-action="openDeleteConfirm" style="background:' + c.error + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Удалить</button></div>';
 
     // Двухколоночная раскладка на десктопе — чтобы карточка помещалась без прокрутки;
     // на узком экране колонки сворачиваются в одну.
     var cols = isMobile ? '1fr' : 'repeat(2,minmax(0,1fr))';
     return '<div style="display:flex;flex-direction:column;gap:12px;">' +
-      '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">' +
-        '<div data-action="goUtm" style="font:600 12.5px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">← Все УТМ</div>' +
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+        '<button data-action="goUtm" style="' + btnGhost(c) + '">← К списку</button>' +
         statusPillWide(sel, c) +
+        actBtns +
       '</div>' +
-      callout +
+      rebindBlock + callout +
       '<div style="display:grid;grid-template-columns:' + cols + ';gap:12px;align-items:start;">' +
-        '<div style="display:flex;flex-direction:column;gap:12px;min-width:0;">' + nameCard + info + actions + '</div>' +
-        '<div style="display:flex;flex-direction:column;gap:12px;min-width:0;">' + portCard + transferCard + danger + '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:12px;min-width:0;">' + nameCard + info + '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:12px;min-width:0;">' + portCard + comboCard + '</div>' +
       '</div>' +
     '</div>';
   }
@@ -1725,7 +1729,9 @@
     goSettings: function () { setScreen('settings'); if (!state.settingsLoaded) loadSettings(); },
     goInstall: function () { setState({ screen: 'install', mobileNavOpen: false, notifOpen: false }); load2Utm(); },
 
-    openUtm: function (el) { setState({ screen: 'utm-detail', selectedUtmId: el.getAttribute('data-id'), mobileNavOpen: false, notifOpen: false }); loadExports(); loadNetStatus(); },
+    openUtm: function (el) { setState({ screen: 'utm-detail', selectedUtmId: el.getAttribute('data-id'), detailTab: 'transfer', mobileNavOpen: false, notifOpen: false }); loadExports(); loadNetStatus(); },
+    detailTabTransfer: function () { setState({ detailTab: 'transfer' }); },
+    detailTabDelete: function () { setState({ detailTab: 'delete' }); },
     /* Экспорт УТМ для переноса (стоп → бандл → introduce-возврат; источник цел). */
     exportUtm: function (el) {
       var service = el.getAttribute('data-service');
