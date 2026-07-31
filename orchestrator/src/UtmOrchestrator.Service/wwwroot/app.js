@@ -641,12 +641,15 @@
       }
       var anyDocs = (inc > 0 || outg > 0);
       var lastTxt = exAgo != null ? fmtSecs(exAgo) + ' назад' : '—';
-      mid = '<div style="display:flex;flex-direction:column;gap:5px;">' +
-          '<div style="display:flex;align-items:center;gap:6px;"><span style="width:7px;height:7px;border-radius:50%;background:' + exCol + ';flex-shrink:0;"></span>' +
-            '<span style="font:12px system-ui,sans-serif;color:' + exCol + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(exText) + '</span></div>' +
-          '<div style="display:flex;align-items:center;gap:6px;"><span style="width:7px;height:7px;border-radius:50%;background:' + (anyDocs ? c.error : c.ok) + ';flex-shrink:0;"></span>' +
-            '<span style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';"><span style="color:' + c.textTertiary + ';">↓</span> Вход: ' + cnt(inc) + ' &nbsp;<span style="color:' + c.textTertiary + ';">↑</span> Исход: ' + cnt(outg) + '</span></div>' +
-          '<div style="font:11.5px system-ui,sans-serif;color:' + c.textTertiary + ';padding-left:13px;">Последний обмен: ' + esc(lastTxt) + '</div>' +
+      mid = '<div style="display:flex;flex-direction:column;gap:10px;padding:2px 0;">' +
+          '<div style="display:flex;align-items:center;gap:9px;"><span style="width:8px;height:8px;border-radius:50%;background:' + exCol + ';flex-shrink:0;"></span>' +
+            '<span style="font:12.5px system-ui,sans-serif;color:' + exCol + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(exText) + '</span></div>' +
+          '<div style="display:flex;align-items:center;gap:9px;"><span style="width:8px;height:8px;border-radius:50%;background:' + (anyDocs ? c.error : c.ok) + ';flex-shrink:0;"></span>' +
+            '<span style="display:inline-flex;align-items:center;gap:18px;font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">' +
+              '<span><span style="color:' + c.textTertiary + ';">↓</span> Вход: ' + cnt(inc) + '</span>' +
+              '<span><span style="color:' + c.textTertiary + ';">↑</span> Исход: ' + cnt(outg) + '</span>' +
+            '</span></div>' +
+          '<div style="font:11.5px system-ui,sans-serif;color:' + c.textTertiary + ';padding-left:17px;">Последний обмен: ' + esc(lastTxt) + '</div>' +
         '</div>';
     }
 
@@ -663,7 +666,7 @@
         '</div>';
 
     // Вся плитка кликабельна: обычно → карточка УТМ; в режиме выбора → переключение выбора.
-    return '<div data-action="' + cardAction + '" data-id="' + esc(u.id) + '" data-service="' + esc(key) + '" title="' + (selMode ? (blocked ? 'Есть документы — выбор недоступен' : 'Выбрать/снять') : 'Открыть карточку УТМ') + '" style="min-width:0;background:' + (checked ? c.brandBg : c.cardBg) + ';border:1px solid ' + (checked ? c.brand : c.border) + ';border-radius:10px;padding:14px 14px 12px;display:flex;flex-direction:column;gap:10px;cursor:' + (blocked ? 'not-allowed' : 'pointer') + ';' + (blocked ? 'opacity:.85;' : '') + '">' +
+    return '<div data-action="' + cardAction + '" data-id="' + esc(u.id) + '" data-service="' + esc(key) + '" title="' + (selMode ? (blocked ? 'Есть документы — выбор недоступен' : 'Выбрать/снять') : 'Открыть карточку УТМ') + '" style="min-width:0;background:' + (checked ? c.brandBg : c.cardBg) + ';border:1px solid ' + (checked ? c.brand : c.border) + ';border-radius:10px;padding:14px 14px 12px;display:flex;flex-direction:column;gap:12px;cursor:' + (blocked ? 'not-allowed' : 'pointer') + ';' + (blocked ? 'opacity:.85;' : '') + '">' +
       identity + divider + mid + docHint + (selMode ? '' : divider) + footer +
     '</div>';
   }
