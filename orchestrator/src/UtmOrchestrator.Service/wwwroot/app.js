@@ -587,11 +587,6 @@
           '<div style="width:6px;height:6px;border-radius:50%;background:' + u.statusColor + ';margin-top:5px;flex-shrink:0;"></div>' +
           '<div style="font:12.5px/1.5 system-ui,sans-serif;color:' + u.statusColor + ';">' + esc(u.reasonText) + '</div></div>'
       : '';
-    var metaBlock = u.hasMeta
-      ? '<div style="display:flex;flex-direction:column;gap:4px;padding:10px 12px;background:' + c.subtleBg + ';border-radius:8px;">' +
-          '<div style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textSecondary + ';">' + esc(u.line1) + '</div>' +
-          '<div style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textSecondary + ';">' + esc(u.line2) + '</div></div>'
-      : '';
     var progress = u.isProgress
       ? '<div style="display:flex;flex-direction:column;gap:6px;padding:10px 12px;background:' + u.statusBg + ';border-radius:8px;">' +
           '<div style="font:12.5px system-ui,sans-serif;color:' + u.statusColor + ';">' + esc(u.progressLabel) + '</div>' +
@@ -638,14 +633,19 @@
           (checked ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 6" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>' : '') +
         '</div>';
     }
-    // Юрлицо/ИНН под названием — показываем всегда (даже при кастомной подписи), чтобы
-    // различать УТМ разных юрлиц на одной машине. Юрлицо прячем, если оно и есть название.
-    var idBits = [];
-    if (u.entity && u.entity !== u.name) idBits.push(esc(u.entity));
-    if (u.inn) idBits.push('ИНН ' + esc(u.inn));
-    var idLine = idBits.length
-      ? '<div style="font:11.5px system-ui,sans-serif;color:' + c.textTertiary + ';">' + idBits.join(' · ') + '</div>'
+    // Юрлицо и ИНН — отдельными строками, показываем всегда (даже при кастомной подписи),
+    // чтобы различать УТМ разных юрлиц. Юрлицо прячем, если оно и есть название.
+    var entityLine = (u.entity && u.entity !== u.name)
+      ? '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(u.entity) + '</div>'
       : '';
+    var innLine = u.inn
+      ? '<div style="font:11.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">ИНН ' + esc(u.inn) + '</div>'
+      : '';
+    // Второстепенное — одной приглушённой строкой (вместо боксов): порт · версия · ФСРАР.
+    var metaParts = ['порт ' + esc(u.port)];
+    if (u.version && u.version !== '—') metaParts.push('v' + esc(u.version));
+    if (u.fsrarDisplay && u.fsrarDisplay !== '—') metaParts.push('ФСРАР ' + esc(u.fsrarDisplay));
+    var metaLine = '<div style="font:11.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">' + metaParts.join(' · ') + '</div>';
     // Подсказка, почему плитку нельзя выбрать (когда в режиме выбора и есть документы).
     var docHint = blocked
       ? '<div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';">Есть документы — выбор недоступен, обработайте их или дождитесь обмена</div>'
@@ -659,16 +659,16 @@
         '</div>';
     // Вся плитка кликабельна: обычно → карточка УТМ; в режиме выбора → переключение выбора
     // (кроме плиток с документами — они заблокированы).
-    return '<div data-action="' + cardAction + '" data-id="' + esc(u.id) + '" data-service="' + esc(key) + '" title="' + (selMode ? (blocked ? 'Есть документы — выбор недоступен' : 'Выбрать/снять') : 'Открыть карточку УТМ') + '" style="min-width:0;background:' + (checked ? c.brandBg : c.cardBg) + ';border:1px solid ' + (checked ? c.brand : c.border) + ';border-radius:10px;padding:18px 18px 14px;display:flex;flex-direction:column;gap:12px;cursor:' + (blocked ? 'not-allowed' : 'pointer') + ';' + (blocked ? 'opacity:.85;' : '') + '">' +
-      '<div style="display:flex;flex-direction:column;gap:8px;min-width:0;">' +
+    return '<div data-action="' + cardAction + '" data-id="' + esc(u.id) + '" data-service="' + esc(key) + '" title="' + (selMode ? (blocked ? 'Есть документы — выбор недоступен' : 'Выбрать/снять') : 'Открыть карточку УТМ') + '" style="min-width:0;background:' + (checked ? c.brandBg : c.cardBg) + ';border:1px solid ' + (checked ? c.brand : c.border) + ';border-radius:10px;padding:16px 16px 12px;display:flex;flex-direction:column;gap:11px;cursor:' + (blocked ? 'not-allowed' : 'pointer') + ';' + (blocked ? 'opacity:.85;' : '') + '">' +
+      // Блок идентификации: имя + статус (в строке), под ним юрлицо, ИНН, порт·версия·ФСРАР.
+      '<div style="display:flex;flex-direction:column;gap:3px;min-width:0;">' +
         '<div style="display:flex;align-items:center;gap:10px;min-width:0;">' + checkbox +
-          '<div style="font:700 15px/1.3 system-ui,sans-serif;color:' + c.textPrimary + ';min-width:0;">' + esc(u.name) + '</div></div>' +
-        idLine +
-        '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">' +
-          '<div style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">порт ' + esc(u.port) + (u.version ? ' · v' + esc(u.version) : '') + '</div>' +
+          '<div style="flex:1;min-width:0;font:700 15px/1.3 system-ui,sans-serif;color:' + c.textPrimary + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(u.name) + '</div>' +
           statusPill(u, c) +
-        '</div></div>' +
-      callout + metaBlock + progress + exchange + docHint + footer +
+        '</div>' +
+        entityLine + innLine + metaLine +
+      '</div>' +
+      callout + progress + exchange + docHint + footer +
     '</div>';
   }
 
