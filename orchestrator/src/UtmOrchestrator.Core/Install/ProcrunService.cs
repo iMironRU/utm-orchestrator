@@ -22,11 +22,20 @@ public static class ProcrunService
         string bat = Path.Combine(binDir, "install.bat");
         if (!File.Exists(bat)) { log($"нет install.bat: {bat}"); return false; }
 
-        // Меняем ТОЛЬКО имя службы: "utm.exe install Transport " → "... install <newService> ".
+        // Впиши имя службы после "utm.exe install". Устойчиво к трём формам bat:
+        //   "install Transport …"  → заменить имя;
+        //   "install <имя> …"       → заменить имя;
+        //   "install --Флаг …"      → ВСТАВИТЬ имя (в перенесённых бандлах имя службы бывает
+        //                             вырезано — тогда старый код запускал bat без имени, и
+        //                             procrun падал с exit 8; это и ломало импорт).
+        // Первый токен после install считаем именем службы, только если он НЕ начинается с '-'.
         string content = File.ReadAllText(bat);
-        string modified = Regex.Replace(content, @"(utm\.exe\s+install\s+)Transport(\s)", "$1" + newService + "$2");
+        var withName = new Regex(@"(utm\.exe\s+install\s+)(?!-)\S+(\s)");
+        string modified = withName.IsMatch(content)
+            ? withName.Replace(content, "$1" + newService + "$2")
+            : Regex.Replace(content, @"(utm\.exe\s+install\s+)", "$1" + newService + " ");
         if (modified == content)
-            log("предупреждение: строка 'install Transport' не найдена — bat запущу как есть");
+            log("предупреждение: не нашёл 'utm.exe install' в install.bat — запущу как есть");
 
         string tmpBat = Path.Combine(binDir, "install-orch.bat");
         try
@@ -47,7 +56,12 @@ public static class ProcrunService
         string binDir = Path.Combine(folder, "transporter", "bin");
         string bat = Path.Combine(binDir, "delete.bat");
         if (!File.Exists(bat)) return false;
-        string modified = Regex.Replace(File.ReadAllText(bat), @"(utm\.exe\s+delete\s+)Transport(\s|$)", "$1" + service + "$2");
+        // Как и в Register — устойчиво к отсутствию имени в delete.bat.
+        string content = File.ReadAllText(bat);
+        var withName = new Regex(@"(utm\.exe\s+delete\s+)(?!-)\S+");
+        string modified = withName.IsMatch(content)
+            ? withName.Replace(content, "$1" + service)
+            : Regex.Replace(content, @"(utm\.exe\s+delete\s+)", "$1" + service + " ");
         string tmpBat = Path.Combine(binDir, "delete-orch.bat");
         try { File.WriteAllText(tmpBat, modified); return Run("cmd.exe", $"/c \"{tmpBat}\"", binDir, log) == 0; }
         finally { try { File.Delete(tmpBat); } catch { } }
