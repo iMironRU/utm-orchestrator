@@ -738,9 +738,8 @@
         '</div>'
       : '<div style="font:12.5px system-ui,sans-serif;color:' + c.textTertiary + ';padding:8px 10px;background:' + c.subtleBg + ';border-radius:8px;">Токен не сопоставлен — задать краткое название нельзя.</div>';
 
-    var nameCard = '<div style="display:flex;flex-direction:column;gap:10px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
+    var nameCard = '<div style="display:flex;flex-direction:column;gap:9px;padding:14px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
       '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Краткое название</div>' +
-      '<div style="font:12px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">Отображается в списках и карточках. Если не задано — показывается организация или адрес из сертификата.</div>' +
       orgLine + nameField +
     '</div>';
 
@@ -748,7 +747,7 @@
     var portCell = '<div style="min-width:0;overflow:hidden;"><div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';margin-bottom:3px;">Порт</div>' +
       '<a data-action="openUtmWeb" data-port="' + esc(sel.port) + '" title="Открыть веб-интерфейс УТМ" style="font:13.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.brand + ';cursor:pointer;text-decoration:none;">' + esc(sel.port) + ' ↗</a></div>';
 
-    var info = '<div style="display:grid;grid-template-columns:' + infoCols + ';gap:12px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
+    var info = '<div style="display:grid;grid-template-columns:' + infoCols + ';gap:12px;padding:14px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
       portCell +
       infoCell('Юрлицо', sel.entity || sel.org || '—', false) +
       infoCell('ИНН', sel.inn || '—', true) +
@@ -766,7 +765,7 @@
         'Перепривязка токена к этому УТМ — <b style="color:' + c.textPrimary + ';">в разработке</b>. Пока используйте «Полечить токены» (перезапуск смарт-карт и подъём) или перезапуск УТМ.' +
       '</div>';
 
-    var actions = '<div style="display:flex;flex-direction:column;gap:12px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
+    var actions = '<div style="display:flex;flex-direction:column;gap:12px;padding:14px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
       '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Действия</div>' +
       '<div style="display:flex;gap:10px;flex-wrap:wrap;">' +
         '<button data-action="utmPrimary" data-name="' + esc(sel.name) + '" data-service="' + esc(sel.service) + '" data-label="' + esc(sel.primaryLabel) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">' + esc(sel.primaryLabel) + '</button>' +
@@ -798,7 +797,7 @@
     var fwBtn = '<button data-action="toggleFirewall" data-service="' + esc(sel.service) + '" data-open="' + (fwOpen ? '0' : '1') + '" ' +
       'style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:7px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">' +
       (fwOpen ? 'Закрыть порт' : 'Открыть порт') + '</button>';
-    var portCard = '<div style="display:flex;flex-direction:column;gap:14px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
+    var portCard = '<div style="display:flex;flex-direction:column;gap:11px;padding:14px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
       '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Порт и доступ</div>' +
       // статус брандмауэра + переключатель
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">' +
@@ -808,7 +807,7 @@
         fwBtn +
       '</div>' +
       // внешний порт (проброс на роутере) — метаданные, храним всегда
-      '<div style="display:flex;flex-direction:column;gap:8px;padding-top:10px;border-top:1px solid ' + c.border + ';">' +
+      '<div style="display:flex;flex-direction:column;gap:8px;padding-top:8px;border-top:1px solid ' + c.border + ';">' +
         '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
           '<span style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">Внешний порт (снаружи):</span>' +
           '<input id="extport-input" type="number" min="1" max="65535" value="' + esc(extPort) + '" ' +
@@ -820,14 +819,14 @@
         '<div style="font:11.5px system-ui,sans-serif;">' + manageLine + '</div>' +
       '</div>' +
       // смена локального порта
-      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:10px;border-top:1px solid ' + c.border + ';">' +
+      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:8px;border-top:1px solid ' + c.border + ';">' +
         '<span style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';">Изменить локальный порт:</span>' +
         '<input id="port-edit-input" type="number" min="1" max="65535" value="' + esc(sel.port) + '" ' +
           'style="width:110px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:7px 10px;border-radius:7px;font:13px ui-monospace,Menlo,Consolas,monospace;"/>' +
         '<button data-action="changePort" data-service="' + esc(sel.service) + '" ' +
           'style="background:' + c.brand + ';border:none;color:#fff;padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Изменить порт</button>' +
       '</div>' +
-      '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">Локальный порт — на нём слушает служба (правило брандмауэра). Внешний порт — под которым УТМ виден из интернета через проброс на роутере; если роутером управляем по UPnP, при открытии порта проброс создаётся автоматически. Смена локального порта перезапустит УТМ (~1 мин, обмен прервётся).</div>' +
+      '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">Локальный порт — на нём слушает служба. Внешний — под которым УТМ виден снаружи через проброс роутера (по UPnP создаётся автоматически). Смена локального порта перезапустит УТМ (~1 мин).</div>' +
     '</div>';
 
     // --- Перенос на другой компьютер ---
@@ -840,9 +839,9 @@
             '<a href="/api/exports/download?name=' + encodeURIComponent(b.name) + '" style="font:600 12px system-ui,sans-serif;color:' + c.brand + ';text-decoration:none;">Скачать ↓</a></div>';
         }).join('')
       : '';
-    var transferCard = '<div style="display:flex;flex-direction:column;gap:12px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
+    var transferCard = '<div style="display:flex;flex-direction:column;gap:12px;padding:14px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
       '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Перенос на другой компьютер</div>' +
-      '<div style="font:12px/1.55 system-ui,sans-serif;color:' + c.textSecondary + ';">Экспортирует УТМ целиком (софт + база + служба) в файл. Затем перенесите файл <b>и токен</b> на новый компьютер и импортируйте там. Экспорт ненадолго остановит этот УТМ и вернёт его назад — источник не меняется.</div>' +
+      '<div style="font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Экспорт УТМ целиком (софт + база + служба) в файл. Перенесите файл <b>и токен</b> на новый ПК и импортируйте. Источник не меняется.</div>' +
       '<div><button data-action="exportUtm" data-service="' + esc(sel.service) + '" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Экспортировать для переноса</button></div>' +
       bundleList +
     '</div>';
@@ -852,9 +851,19 @@
       '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:2px;">Необратимо: настройки и привязка токена будут удалены</div></div>' +
       '<button data-action="openDeleteConfirm" style="background:' + c.error + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Удалить</button></div>';
 
-    return '<div style="display:flex;flex-direction:column;gap:16px;">' +
-      '<div data-action="goUtm" style="font:600 12.5px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">← Все УТМ</div>' +
-      statusPillWide(sel, c) + callout + nameCard + info + portCard + actions + transferCard + danger +
+    // Двухколоночная раскладка на десктопе — чтобы карточка помещалась без прокрутки;
+    // на узком экране колонки сворачиваются в одну.
+    var cols = isMobile ? '1fr' : 'repeat(2,minmax(0,1fr))';
+    return '<div style="display:flex;flex-direction:column;gap:12px;">' +
+      '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">' +
+        '<div data-action="goUtm" style="font:600 12.5px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;">← Все УТМ</div>' +
+        statusPillWide(sel, c) +
+      '</div>' +
+      callout +
+      '<div style="display:grid;grid-template-columns:' + cols + ';gap:12px;align-items:start;">' +
+        '<div style="display:flex;flex-direction:column;gap:12px;min-width:0;">' + nameCard + info + actions + '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:12px;min-width:0;">' + portCard + transferCard + danger + '</div>' +
+      '</div>' +
     '</div>';
   }
 
