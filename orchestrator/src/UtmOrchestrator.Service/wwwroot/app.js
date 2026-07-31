@@ -540,8 +540,9 @@
       return '<div style="display:grid;grid-template-columns:' + gridCols + ';gap:16px;">' +
         listv.map(function (u) { return overviewCard(u, c, selMode, utmIsSelected(u)); }).join('') + '</div>';
     }
-    // Группировка по юрлицу (ключ — ИНН, иначе имя юрлица). Заголовки групп показываем,
-    // только когда юрлиц больше одного — иначе лишний шум на однофирменной машине.
+    // Группировка по юрлицу (ключ — ИНН, иначе имя юрлица). Заголовок группы
+    // (Юрлицо · ИНН · N УТМ) показываем ВСЕГДА — даже если юрлицо одно, чтобы вид был
+    // единообразным и сразу читалось, чьи это УТМ.
     var groups = {}, order = [];
     shown.forEach(function (v) {
       var k = v.inn || v.entity || '—';
@@ -551,22 +552,17 @@
     order.sort(function (a, b) {
       return ('' + (groups[a][0].entity || a)).localeCompare('' + (groups[b][0].entity || b), 'ru');
     });
-    var grid;
-    if (order.length > 1) {
-      grid = '<div style="display:flex;flex-direction:column;gap:18px;">' + order.map(function (k) {
-        var g = groups[k], h = g[0];
-        var label = (h.entity || 'Юрлицо не определено') + (h.inn ? ' · ИНН ' + h.inn : '');
-        return '<div style="display:flex;flex-direction:column;gap:12px;">' +
-            '<div style="display:flex;align-items:center;gap:10px;">' +
-              '<div style="font:700 13px system-ui,sans-serif;color:' + c.textSecondary + ';white-space:nowrap;">' + esc(label) + '</div>' +
-              '<div style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';white-space:nowrap;">· ' + g.length + ' УТМ</div>' +
-              '<div style="flex:1;height:1px;background:' + c.border + ';"></div>' +
-            '</div>' + cardGrid(g) +
-          '</div>';
-      }).join('') + '</div>';
-    } else {
-      grid = cardGrid(shown);
-    }
+    var grid = '<div style="display:flex;flex-direction:column;gap:18px;">' + order.map(function (k) {
+      var g = groups[k], h = g[0];
+      var label = (h.entity || 'Юрлицо не определено') + (h.inn ? ' · ИНН ' + h.inn : '');
+      return '<div style="display:flex;flex-direction:column;gap:12px;">' +
+          '<div style="display:flex;align-items:center;gap:10px;">' +
+            '<div style="font:700 13px system-ui,sans-serif;color:' + c.textSecondary + ';white-space:nowrap;">' + esc(label) + '</div>' +
+            '<div style="font:12px system-ui,sans-serif;color:' + c.textTertiary + ';white-space:nowrap;">· ' + g.length + ' УТМ</div>' +
+            '<div style="flex:1;height:1px;background:' + c.border + ';"></div>' +
+          '</div>' + cardGrid(g) +
+        '</div>';
+    }).join('') + '</div>';
 
     // Плавающая панель групповых действий — когда что-то выбрано.
     var actionBar = (selMode && selCount)
