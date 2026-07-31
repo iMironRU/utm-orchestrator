@@ -998,6 +998,92 @@ app.MapPost("/api/service/restart", () =>
     return Results.Accepted(value: new { ok = true });
 });
 
+// --- Удалить УТМ: стоп службы + снять регистрацию + убрать из state + правило ФВ (+ файлы) ---
+app.MapPost("/api/utm/delete", (DeleteUtmRequest req) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    if (string.IsNullOrWhiteSpace(req.Service)) return Results.BadRequest(new { error = "service обязателен" });
+    if (!ReaderOp.Gate.Wait(0))
+        return Results.Conflict(new { error = "идёт операция с ридерами — попробуйте позже" });
+    try
+    {
+        var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+        var inst = st.Instances.FirstOrDefault(i => string.Equals(i.ServiceName, req.Service, StringComparison.OrdinalIgnoreCase));
+        if (inst is null) return Results.NotFound(new { error = $"УТМ {req.Service} не найден в конфигурации" });
+
+        ReaderOp.FileLog($"=== удаление УТМ {inst.ServiceName} (папка {inst.FolderPath}, файлы={req.DeleteFiles}) ===");
+        try { UtmOrchestrator.Core.Services.ServiceControl.Stop(inst.ServiceName, TimeSpan.FromSeconds(20)); } catch { }
+        // Снять службу: сперва штатным delete.bat, иначе sc delete.
+        bool unreg = false;
+        try { unreg = UtmOrchestrator.Core.Install.ProcrunService.Unregister(inst.ServiceName, inst.FolderPath, ReaderOp.FileLog); } catch { }
+        if (!unreg)
+        {
+            try
+            {
+                using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+                    "sc.exe", $"delete {inst.ServiceName}") { UseShellExecute = false, CreateNoWindow = true });
+                p!.WaitForExit(10000);
+                ReaderOp.FileLog($"delete: sc delete {inst.ServiceName} exit {p.ExitCode}");
+            }
+            catch (Exception e) { ReaderOp.FileLog($"delete: sc delete не удался: {e.Message}"); }
+        }
+        if (inst.Port > 0) { try { UtmOrchestrator.Core.Firewall.FirewallManager.DeleteRule(inst.Port, ReaderOp.FileLog); } catch { } }
+        st.Instances.RemoveAll(i => string.Equals(i.ServiceName, req.Service, StringComparison.OrdinalIgnoreCase));
+        st.Save(OrchestratorState.DefaultPath);
+        if (req.DeleteFiles && !string.IsNullOrWhiteSpace(inst.FolderPath) && Directory.Exists(inst.FolderPath))
+        {
+            try { Directory.Delete(inst.FolderPath, true); ReaderOp.FileLog($"delete: папка удалена {inst.FolderPath}"); }
+            catch (Exception e) { ReaderOp.FileLog($"delete: папку удалить не удалось (занята, освободится позже): {e.Message}"); }
+        }
+        ReaderOp.FileLog($"=== УТМ {inst.ServiceName} удалён ===");
+        return Results.Ok(new { ok = true, service = inst.ServiceName });
+    }
+    catch (Exception e) { ReaderOp.FileLog($"delete: СБОЙ — {e}"); return Results.Problem("ошибка удаления: " + e.Message); }
+    finally { ReaderOp.Gate.Release(); }
+});
+
+// --- ПОЛНАЯ деинсталляция: снести ВСЕ УТМ + сам оркестратор. Служба не может удалить
+// себя изнутри — пишем отдельный uninstall.ps1 во временную папку и запускаем его
+// detached (служба = LocalSystem = админ). Он останавливает всё, чистит автозапуск,
+// правила ФВ, папки и саму C:\UtmOrchestrator. Требуется явное confirm=true. ⚠ Необратимо. -->
+app.MapPost("/api/service/uninstall", (UninstallRequest req) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    if (req?.Confirm != true) return Results.BadRequest(new { error = "нужно подтверждение (confirm=true)" });
+    try
+    {
+        string appDir = AppContext.BaseDirectory.TrimEnd('\\');
+        string ps1 = Path.Combine(Path.GetTempPath(), $"utmo-uninstall-{Guid.NewGuid():N}.ps1");
+        // Скрипт запускается ВНЕ C:\UtmOrchestrator, поэтому может удалить и её после стопа службы.
+        string script = """
+$ErrorActionPreference='SilentlyContinue'
+Start-Sleep 2
+foreach($s in Get-Service Transport* ){ & sc.exe stop $s.Name | Out-Null }
+Start-Sleep 2
+Get-Process utm | Stop-Process -Force
+foreach($s in Get-Service Transport* ){ & sc.exe delete $s.Name | Out-Null }
+& sc.exe stop UtmOrchestrator | Out-Null
+Start-Sleep 2
+& sc.exe delete UtmOrchestrator | Out-Null
+Get-Process *UtmOrchestrator* | Stop-Process -Force
+Get-ScheduledTask | ? { $_.TaskName -match 'Utm|Orchestrator' } | Unregister-ScheduledTask -Confirm:$false
+foreach($h in 'HKCU:','HKLM:'){ $rk="$h\Software\Microsoft\Windows\CurrentVersion\Run"; $it=Get-Item $rk -EA SilentlyContinue; if($it){ $it.Property | ? { $_ -match 'Utm|Orchestrator' } | % { Remove-ItemProperty $rk -Name $_ } } }
+Get-NetFirewallRule | ? { $_.DisplayName -like 'UTM-Orchestrator-*' } | Remove-NetFirewallRule
+foreach($f in @(Get-ChildItem 'C:\' -Directory | ? { $_.Name -match '^(UTM|UTM_\d+)$' })){ [System.IO.Directory]::Delete($f.FullName,$true) }
+Start-Sleep 1
+[System.IO.Directory]::Delete('__APPDIR__',$true)
+""";
+        script = script.Replace("__APPDIR__", appDir.Replace("'", "''"));
+        File.WriteAllText(ps1, script, System.Text.Encoding.UTF8);
+        ReaderOp.FileLog($"=== ДЕИНСТАЛЛЯЦИЯ запрошена — запускаю {ps1} (снесёт УТМ + оркестратор) ===");
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
+            "powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{ps1}\"")
+        { UseShellExecute = false, CreateNoWindow = true });
+    }
+    catch (Exception e) { return Results.Problem("не удалось запустить деинсталляцию: " + e.Message); }
+    return Results.Accepted(value: new { ok = true });
+});
+
 // --- Очередь интерактивных заданий (веб ↔ трей) ---
 // Веб кладёт задание (scan/heal), трей (в интерактивной сессии) забирает pending,
 // выполняет и возвращает результат, веб опрашивает по id. Только localhost.
@@ -1354,6 +1440,8 @@ record AddUtmRequest(string? Serial, string? Fsrar, string? Reader, int? Port);
 record AddAllRequest(List<AdoptToken>? Tokens);
 record BatchServicesRequest(List<string>? Services);
 record ImportCommitRequest(string? Handle, int Port);
+record DeleteUtmRequest(string? Service, bool DeleteFiles);
+record UninstallRequest(bool Confirm);
 record SettingsRequest(bool RequireAuth, string? Username, bool NetworkAccess, List<string>? AllowedIps, string? NewPassword);
 
 // Кэш статуса обмена по папке УТМ: transport_info.log читаем не чаще раза в ~20с

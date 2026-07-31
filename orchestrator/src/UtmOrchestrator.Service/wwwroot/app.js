@@ -1504,7 +1504,14 @@
       ]) +
     '</div>';
 
-    return '<div style="display:flex;flex-direction:column;gap:16px;">' + security + pins + schedule + firewall + theme + '</div>';
+    // Опасная зона: полное удаление оркестратора и всех УТМ с машины.
+    var dangerZone = '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:16px 18px;background:' + c.errorSoftBg + ';border:1px solid ' + c.error + ';border-radius:12px;">' +
+      '<div style="min-width:0;"><div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Удалить оркестратор и все УТМ</div>' +
+      '<div style="font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:2px;">Полная зачистка машины: все службы УТМ, их папки и сам оркестратор. Токены не пострадают. Необратимо.</div></div>' +
+      '<button data-action="uninstallOrchestrator" style="background:' + c.error + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;flex-shrink:0;">Удалить всё</button>' +
+    '</div>';
+
+    return '<div style="display:flex;flex-direction:column;gap:16px;">' + security + pins + schedule + firewall + theme + dangerZone + '</div>';
   }
 
   /* ====================== ГЛАВНЫЙ РЕНДЕР ====================== */
@@ -1539,7 +1546,7 @@
     return '<div style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px;">' +
       '<div data-pop="1" style="width:100%;max-width:380px;background:' + c.cardBg + ';border-radius:14px;padding:22px;display:flex;flex-direction:column;gap:14px;">' +
         '<div style="font:700 15px system-ui,sans-serif;color:' + c.textPrimary + ';">Удалить УТМ «' + esc(sel.name) + '»?</div>' +
-        '<div style="font:13px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">Это действие необратимо. Настройки и привязка токена будут удалены.</div>' +
+        '<div style="font:13px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">Это действие необратимо. Служба будет снята, правило файрвола удалено, папка УТМ (софт + база) стёрта. Токен не пострадает.</div>' +
         '<div style="display:flex;justify-content:flex-end;gap:10px;">' +
           '<button data-action="closeDeleteConfirm" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:9px 16px;border-radius:8px;font:600 13px system-ui,sans-serif;cursor:pointer;">Отмена</button>' +
           '<button data-action="confirmDelete" style="background:' + c.error + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 13px system-ui,sans-serif;cursor:pointer;">Удалить</button>' +
@@ -1876,7 +1883,20 @@
     filterProblems: function () { setState({ overviewFilter: 'problem' }); },
     clearOverviewFilter: function () { setState({ overviewFilter: null }); },
     recheckAll: function () { showToast('Проверка запущена…'); pollStatus(); },
-    raiseAll: function () { notReady('Поднять все УТМ разом'); },
+    raiseAll: function () {
+      askConfirm({ title: 'Поднять все УТМ', okLabel: 'Поднять', danger: true,
+        message: 'Поднять все УТМ? Служба смарт-карт перезапустится, обмен прервётся на ~1–2 мин, затем каждый УТМ поднимется на свой токен по серийнику.' }, function () {
+        showToast('Поднимаю все УТМ…');
+        fetch('/api/utm/heal', { method: 'POST' })
+          .then(function (r) {
+            if (r.status === 409) { showToast('Уже идёт операция с ридерами — подождите'); return; }
+            if (!r.ok) throw new Error();
+            showToast('Подъём запущен — статус обновится автоматически (~1–2 мин)');
+          })
+          .catch(function () { showToast('Не удалось запустить подъём'); })
+          .then(function () { pollStatus(true); });
+      });
+    },
     utmPrimary: function (el) {
       var label = el.getAttribute('data-label');
       var service = el.getAttribute('data-service');
@@ -2131,7 +2151,36 @@
     confirmCancel: function () { _confirmCb = null; setState({ confirm: null }); },
     openDeleteConfirm: function () { setState({ confirmDeleteOpen: true }); },
     closeDeleteConfirm: function () { setState({ confirmDeleteOpen: false }); },
-    confirmDelete: function () { setState({ confirmDeleteOpen: false }); notReady('Удаление УТМ'); },
+    confirmDelete: function () {
+      var sel = selectedUtm();
+      setState({ confirmDeleteOpen: false });
+      if (!sel || !sel.service) { showToast('УТМ не выбран'); return; }
+      showToast('Удаляю УТМ ' + (sel.name || sel.service) + '…');
+      fetch('/api/utm/delete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ service: sel.service, deleteFiles: true }),
+      })
+        .then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (x) {
+          if (x.ok && x.d.ok) { showToast('УТМ удалён'); setScreen('overview'); pollStatus(true); }
+          else { showToast('Не удалось удалить: ' + (x.d.error || 'ошибка')); }
+        })
+        .catch(function () { showToast('Ошибка сети при удалении'); });
+    },
+    uninstallOrchestrator: function () {
+      askConfirm({ title: 'Удалить оркестратор и ВСЕ УТМ', okLabel: 'Продолжить', danger: true,
+        message: 'НЕОБРАТИМО снесёт ВСЕ УТМ (службы + папки) и сам оркестратор с этой машины. Токены не пострадают — ключи ЕГАИС на самих токенах. Панель через ~10–20с станет недоступна.' }, function () {
+        askConfirm({ title: 'Точно снести всё?', okLabel: 'Да, удалить всё', danger: true,
+          message: 'Последнее предупреждение. Вернуть можно только переустановкой оркестратора. Удаляем всё?' }, function () {
+          showToast('Запускаю полное удаление…');
+          fetch('/api/service/uninstall', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true }),
+          })
+            .then(function (r) { if (!r.ok) throw new Error(); showToast('Удаление запущено — панель скоро исчезнет.'); })
+            .catch(function () { showToast('Не удалось запустить удаление'); });
+        });
+      });
+    },
 
     /* токены */
     resetReaders: function () { notReady('Сброс ридеров (используйте «Полечить токены»)'); },

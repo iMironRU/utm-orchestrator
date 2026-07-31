@@ -228,7 +228,12 @@ public static class UtmTransfer
             FolderPath = folder,
             TokenSerial = manifest.TokenSerial,
             ExpectedFsrar = manifest.Fsrar,
-            ReaderName = manifest.ReaderName, // подсказка; уточнится при серийной привязке
+            // ВАЖНО: имя ридера НЕ переносим с источника — оно машинно-зависимое (порядок
+            // USB-перечисления на приёмнике другой), из-за него быстрый introduce-подъём
+            // брал не тот токен → «ФСРАР не тот». Оставляем null: на приёмнике имя ридера
+            // будет открыто по СЕРИЙНИКУ при «Привязать все токены» (BootBringUp.Apply,
+            // серийный скан) и сохранено в state.json.
+            ReaderName = null,
             // Внешний порт сохраняем как на источнике — «наружу» УТМ должен остаться виден
             // под тем же портом (учётные системы его не меняют), даже если локальный сдвинулся.
             ExternalPort = manifest.ExternalPort,
