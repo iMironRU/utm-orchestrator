@@ -41,6 +41,15 @@ for proj in "${PROJECTS[@]}"; do
     "${VERARG[@]}" -o "$FULL" -v q
 done
 
+# Чистим мусор публикации ДО классификации: папки локализаций фреймворка (cs/de/ru/…),
+# *.pdb и web.config — в проде не нужны, только захламляют C:\UtmOrchestrator. Убираем из
+# $FULL, чтобы не попали ни в app, ни в runtime. (Среду выполнения — System.*.dll — трогать
+# нельзя, она обязана лежать рядом с exe.)
+echo "=== чистка мусора публикации в full (локализации, pdb, web.config) ==="
+for loc in cs de es fr it ja ko pl pt-BR ru tr zh-Hans zh-Hant; do rm -rf "$FULL/$loc"; done
+find "$FULL" -maxdepth 1 -name '*.pdb' -delete
+rm -f "$FULL/web.config"
+
 echo "=== framework-dependent (эталон классификации) → $FDREF ==="
 for proj in "${PROJECTS[@]}"; do
   "$DOTNET" publish "src/UtmOrchestrator.$proj/UtmOrchestrator.$proj.csproj" \
