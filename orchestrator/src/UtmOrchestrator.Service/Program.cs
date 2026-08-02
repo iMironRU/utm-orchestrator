@@ -644,7 +644,7 @@ app.MapPost("/api/utm/export", (RestartRequest req, NameStore names) =>
         return Results.Conflict(new { error = "уже идёт операция с ридерами — попробуйте позже" });
 
     var allReaders = state.Instances.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
-    string exportsDir = Path.Combine(AppContext.BaseDirectory, "exports");
+    string exportsDir = UtmOrchestrator.Core.AppPaths.Transfer("exports");
     // Кастомная подпись УТМ (имя точки) — кладём в бандл, чтобы не переподписывать на приёмнике.
     string? displayName = names.Get(inst.TokenSerial);
 
@@ -679,7 +679,7 @@ app.MapPost("/api/utm/export-batch", (BatchServicesRequest req, NameStore names)
 
     var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
     var allReaders = state.Instances.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
-    string exportsDir = Path.Combine(AppContext.BaseDirectory, "exports");
+    string exportsDir = UtmOrchestrator.Core.AppPaths.Transfer("exports");
     // Захватываем инстансы+подписи заранее (в фоне state не перечитываем).
     var jobs = services
         .Select(s => state.Instances.FirstOrDefault(i =>
@@ -715,7 +715,7 @@ app.MapPost("/api/utm/export-batch", (BatchServicesRequest req, NameStore names)
 // --- Список готовых бандлов переноса ---
 app.MapGet("/api/exports", () =>
 {
-    string dir = Path.Combine(AppContext.BaseDirectory, "exports");
+    string dir = UtmOrchestrator.Core.AppPaths.Transfer("exports");
     var list = new List<object>();
     if (Directory.Exists(dir))
         foreach (var fi in new DirectoryInfo(dir).EnumerateFiles("UTM-export-*.zip")
@@ -729,7 +729,7 @@ app.MapGet("/api/exports/download", (string name) =>
 {
     if (string.IsNullOrWhiteSpace(name) || name.Contains("..") || name.Contains('/') || name.Contains('\\'))
         return Results.BadRequest(new { error = "некорректное имя" });
-    string path = Path.Combine(AppContext.BaseDirectory, "exports", name);
+    string path = Path.Combine(UtmOrchestrator.Core.AppPaths.Transfer("exports"), name);
     if (!File.Exists(path)) return Results.NotFound(new { error = "бандл не найден" });
     return Results.File(path, "application/zip", name);
 });
@@ -747,7 +747,7 @@ app.MapPost("/api/utm/import", async (HttpRequest request, NameStore names, Seri
     var maxFeat = request.HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
     if (maxFeat is not null && !maxFeat.IsReadOnly) maxFeat.MaxRequestBodySize = null;
 
-    string importsDir = Path.Combine(AppContext.BaseDirectory, "imports");
+    string importsDir = UtmOrchestrator.Core.AppPaths.Transfer("imports");
     Directory.CreateDirectory(importsDir);
     string reqName = request.Query["name"].ToString();
     string safe = Path.GetFileName(reqName);
@@ -820,7 +820,7 @@ app.MapPost("/api/utm/import/inspect", async (HttpRequest request) =>
     var maxFeat = request.HttpContext.Features.Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
     if (maxFeat is not null && !maxFeat.IsReadOnly) maxFeat.MaxRequestBodySize = null;
 
-    string importsDir = Path.Combine(AppContext.BaseDirectory, "imports");
+    string importsDir = UtmOrchestrator.Core.AppPaths.Transfer("imports");
     Directory.CreateDirectory(importsDir);
     string handle = $"import-{Guid.NewGuid():N}.zip"; // уникальный, чтобы параллельные осмотры не перетёрлись
     string bundlePath = Path.Combine(importsDir, handle);
@@ -858,7 +858,7 @@ app.MapPost("/api/utm/import/commit", async (ImportCommitRequest req, NameStore 
     if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
     if (string.IsNullOrWhiteSpace(req.Handle)) return Results.BadRequest(new { error = "handle обязателен" });
     string safe = Path.GetFileName(req.Handle);
-    string bundlePath = Path.Combine(AppContext.BaseDirectory, "imports", safe);
+    string bundlePath = Path.Combine(UtmOrchestrator.Core.AppPaths.Transfer("imports"), safe);
     if (!File.Exists(bundlePath)) return Results.NotFound(new { error = "бандл не найден — повторите выбор файла" });
 
     if (!await importGate.WaitAsync(TimeSpan.FromMinutes(5)))

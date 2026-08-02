@@ -17,7 +17,7 @@ namespace UtmOrchestrator.Core.Install;
 [SupportedOSPlatform("windows")]
 public static class UtmDistCache
 {
-    public static string CacheDir => Path.Combine(AppContext.BaseDirectory, "utm-dist");
+    public static string CacheDir => Path.Combine(AppPaths.CacheDir, "utm-dist");
 
     private static readonly string[] DevUnpacked =
     {
