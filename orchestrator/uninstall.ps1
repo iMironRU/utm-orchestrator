@@ -1,9 +1,8 @@
 ﻿#Requires -RunAsAdministrator
 <#
   Удаление УТМ:Оркестратор. От администратора:
-    powershell -ExecutionPolicy Bypass -File uninstall.ps1
-  По умолчанию папку C:\UtmOrchestrator НЕ удаляет (данные сохраняются).
-  Для полного удаления: uninstall.ps1 -Purge
+    powershell -ExecutionPolicy Bypass -File uninstall.ps1          # оставит папку/данные
+    powershell -ExecutionPolicy Bypass -File uninstall.ps1 -Purge   # снесёт папку целиком
   ВАЖНО: сами УТМ (службы Transport*) НЕ трогаются — оркестратор ими только управляет.
 #>
 param([string]$Dst = 'C:\UtmOrchestrator', [switch]$Purge)
@@ -18,13 +17,16 @@ if (Get-Service UtmOrchestrator -ErrorAction SilentlyContinue) {
   sc.exe delete UtmOrchestrator | Out-Null
   Write-Host "  служба удалена"
 }
-# трей
+# трей: и старый exe, и новый запуск через муксер (dotnet.exe с Tray.dll)
 Get-Process UtmOrchestrator.Tray -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" -EA SilentlyContinue |
+  Where-Object { $_.CommandLine -like '*UtmOrchestrator.Tray.dll*' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
 Remove-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name UtmOrchestratorTray -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName 'UtmOrchestrator-Tray' -Confirm:$false -ErrorAction SilentlyContinue
-Write-Host "  трей убран из автозагрузки (Run-ключ + задача)"
+Write-Host "  трей убран из автозагрузки"
 
-# убрать из «Установка и удаление программ»
+# из «Установка и удаление программ»
 Remove-Item 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\UtmOrchestrator' -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "  запись в «Программах и компонентах» удалена"
 

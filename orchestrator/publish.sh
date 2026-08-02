@@ -23,68 +23,46 @@ export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 
 cd "$(dirname "$0")"
 OUT="dist"
-FULL="$OUT/_full"      # self-contained (наш код + рантайм) — источник файлов
-FDREF="$OUT/_fdref"    # framework-dependent — эталон «что относится к нашему коду»
-APP="$OUT/app"
-RT="$OUT/runtime"
-rm -rf "$OUT"; mkdir -p "$FULL" "$FDREF" "$APP" "$RT"
+APP="$OUT/app"        # bin/app/* (наш код) + скрипты + runtime.key  (~несколько МБ, каждый релиз)
+RT="$OUT/runtime"     # bin/runtime/* (приватный .NET)               (~70 МБ, меняется при апгрейде .NET)
+rm -rf "$OUT"; mkdir -p "$APP/bin/app" "$RT/bin/runtime"
 
 VERARG=()
 if [ -n "${VERSION:-}" ]; then VERARG+=(-p:Version="$VERSION"); fi
 
 PROJECTS=(Service Tray Cli)
 
-echo "=== self-contained (общий рантайм, без single-file) → $FULL ==="
-for proj in "${PROJECTS[@]}"; do
-  "$DOTNET" publish "src/UtmOrchestrator.$proj/UtmOrchestrator.$proj.csproj" \
-    -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false \
-    "${VERARG[@]}" -o "$FULL" -v q
-done
-
-# Чистим мусор публикации ДО классификации: папки локализаций фреймворка (cs/de/ru/…),
-# *.pdb и web.config — в проде не нужны, только захламляют C:\UtmOrchestrator. Убираем из
-# $FULL, чтобы не попали ни в app, ни в runtime. (Среду выполнения — System.*.dll — трогать
-# нельзя, она обязана лежать рядом с exe.)
-echo "=== чистка мусора публикации в full (локализации, pdb, web.config) ==="
-for loc in cs de es fr it ja ko pl pt-BR ru tr zh-Hans zh-Hant; do rm -rf "$FULL/$loc"; done
-find "$FULL" -maxdepth 1 -name '*.pdb' -delete
-rm -f "$FULL/web.config"
-
-echo "=== framework-dependent (эталон классификации) → $FDREF ==="
+echo "=== наш код (framework-dependent, без рантайма) → $APP/bin/app ==="
 for proj in "${PROJECTS[@]}"; do
   "$DOTNET" publish "src/UtmOrchestrator.$proj/UtmOrchestrator.$proj.csproj" \
     -c Release -r win-x64 --self-contained false -p:PublishSingleFile=false \
-    "${VERARG[@]}" -o "$FDREF" -v q
+    "${VERARG[@]}" -o "$APP/bin/app" -v q
 done
 
-echo "=== раскладываю full → app/ + runtime/ ==="
-# Файл относится к app, если такой же путь есть во framework-dependent сборке
-# (наш код, host-exe, *.deps.json, *.runtimeconfig.json, NuGet-зависимости, wwwroot).
-# Всё остальное из full — файлы рантайма.
-( cd "$FULL" && find . -type f -print0 ) | while IFS= read -r -d '' f; do
-  rel="${f#./}"
-  if [ -e "$FDREF/$rel" ]; then dest="$APP/$rel"; else dest="$RT/$rel"; fi
-  mkdir -p "$(dirname "$dest")"
-  cp "$FULL/$rel" "$dest"
-done
+echo "=== чистка мусора публикации (локализации/pdb/web.config) ==="
+for loc in cs de es fr it ja ko pl pt-BR ru tr zh-Hans zh-Hant; do rm -rf "$APP/bin/app/$loc"; done
+find "$APP/bin/app" -maxdepth 1 -name '*.pdb' -delete
+rm -f "$APP/bin/app/web.config"
 
-# Скрипты установки/обновления — в app
+echo "=== приватный .NET-рантайм (dotnet + host + shared) → $RT/bin/runtime ==="
+if [ -n "${DOTNET_ROOT:-}" ]; then DOTNET_DIR="$DOTNET_ROOT"; else DOTNET_DIR=$(dirname "$DOTNET"); fi
+RTB="$RT/bin/runtime"
+cp "$DOTNET_DIR/dotnet.exe" "$RTB/"
+cp -r "$DOTNET_DIR/host" "$RTB/"
+mkdir -p "$RTB/shared"
+cp -r "$DOTNET_DIR/shared/Microsoft.NETCore.App"    "$RTB/shared/"
+cp -r "$DOTNET_DIR/shared/Microsoft.AspNetCore.App" "$RTB/shared/"
+
+# Скрипты установки/обновления — в КОРЕНЬ app-пейлоада (Setup/самообновление видят рядом).
 cp install.ps1 uninstall.ps1 update.ps1 "$APP/" 2>/dev/null || true
 
-# Бандл innoextract (для распаковки офиц. дистрибутива УТМ на чистой машине).
-if [ -d tools ]; then
-  mkdir -p "$APP/tools"
-  cp -r tools/. "$APP/tools/"
-fi
+# innoextract — рядом с нашим кодом (bin/app/tools).
+if [ -d tools ]; then mkdir -p "$APP/bin/app/tools"; cp -r tools/. "$APP/bin/app/tools/"; fi
 
-# Ключ рантайма = хэш списка файлов рантайма (путь:размер). Меняется только при
-# смене состава/версии рантайма. Кладём и в app (runtime.key — что требуется), и в dist.
+# Ключ рантайма = хэш списка файлов рантайма (путь:размер). Меняется только при апгрейде .NET.
 KEY=$( ( cd "$RT" && find . -type f -printf '%P:%s\n' | LC_ALL=C sort | sha256sum ) | cut -c1-12 )
 echo "$KEY" > "$APP/runtime.key"
 echo "$KEY" > "$OUT/runtime-key.txt"
-
-# Чистим временные
-rm -rf "$FULL" "$FDREF"
 
 echo "=== готово ==="
 echo "runtime key: $KEY"
