@@ -9,8 +9,9 @@ Stop-Service UtmOrchestrator -Force
 Get-Process UtmOrchestrator.Tray -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep 3
 
-# Copy new files; keep data\ and appsettings.json; don't copy the *.ps1 helpers.
-robocopy $Src $Dst /E /XD "$Dst\data" /XF appsettings.json install.ps1 uninstall.ps1 update.ps1 /NFL /NDL /NJH /NJS /NC /NS /R:2 /W:1 | Out-Null
+# Copy new files; keep data\, utm\ (our UTM folders) and appsettings.json; don't copy *.ps1 helpers.
+# robocopy without /PURGE never deletes dest-only dirs, so utm\ survives anyway; /XD is explicit safety.
+robocopy $Src $Dst /E /XD "$Dst\data" "$Dst\utm" /XF appsettings.json install.ps1 uninstall.ps1 update.ps1 /NFL /NDL /NJH /NJS /NC /NS /R:2 /W:1 | Out-Null
 
 Start-Service UtmOrchestrator
 # Relaunch tray in the operator's interactive session (task principal = interactive user).

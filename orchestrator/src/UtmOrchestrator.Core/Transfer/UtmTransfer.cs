@@ -279,17 +279,10 @@ public static class UtmTransfer
         catch (Exception e) { return (null, "не удалось прочитать манифест: " + e.Message); }
     }
 
-    // Папка приёмника: предпочитаем исходную (меньше расхождений путей), если свободна;
-    // иначе — следующая свободная C:\UTM_N.
-    private static string ChooseFolder(string? sourceFolder)
-    {
-        if (!string.IsNullOrWhiteSpace(sourceFolder) && !Directory.Exists(sourceFolder))
-            return sourceFolder!;
-        int idx = 2;
-        string folder;
-        do { folder = idx == 1 ? @"C:\UTM" : $@"C:\UTM_{idx}"; idx++; } while (Directory.Exists(folder));
-        return folder;
-    }
+    // Папка приёмника: всегда в НАШ корень (C:\UtmOrchestrator\utm\utm-N) — чтобы «наши» УТМ
+    // были в одном месте, отделены от чужих и одинаково на любой машине. Исходный путь с
+    // источника больше не используем (он машинно-зависимый и путал «свои/чужие»).
+    private static string ChooseFolder(string? sourceFolder) => AppPaths.NextUtmFolder();
 
     // Имя службы: предпочитаем исходное, если не занято и не установлено; иначе Transport/TransportN.
     private static string ChooseService(string sourceService, IReadOnlyList<UtmInstance> existing)

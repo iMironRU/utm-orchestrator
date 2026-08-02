@@ -28,10 +28,9 @@ public static class UtmInstaller
         int port = desiredPort ?? (usedPorts.Count > 0 ? usedPorts.Max() + 1 : 8080);
         while (usedPorts.Contains(port) || PortInUse(port)) port++;
 
-        int idx = 2;
-        string folder;
-        do { folder = idx == 1 ? @"C:\UTM" : $@"C:\UTM_{idx}"; idx++; }
-        while (Directory.Exists(folder));
+        // Новые УТМ — в нашу папку (C:\UtmOrchestrator\utm\utm-N), чтобы «наши» были в одном
+        // месте и отделены от чужих. Существующие в C:\UTM_N не трогаем.
+        string folder = AppPaths.NextUtmFolder();
 
         string svcBase = "Transport";
         string service = svcBase;
