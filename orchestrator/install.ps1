@@ -34,6 +34,29 @@ if (-not (Get-Service UtmOrchestrator -ErrorAction SilentlyContinue)) {
   Write-Host "  служба UtmOrchestrator зарегистрирована (Automatic)"
 } else { Write-Host "  служба уже есть" }
 
+# uninstall.ps1 нужен В папке установки (на него ссылается запись в «Программах и
+# компонентах»); robocopy выше его исключает, поэтому кладём явно.
+Copy-Item "$src\uninstall.ps1" "$Dst\uninstall.ps1" -Force -ErrorAction SilentlyContinue
+
+# 3b) регистрация в «Установка и удаление программ» (Windows Apps & Features).
+#     UninstallString запускает наш uninstall.ps1 -Purge (сносит оркестратор; службы УТМ
+#     Transport* НЕ трогает). Так оркестратор можно снести штатно из «Программ и компонентов».
+$ver = (Get-Item "$Dst\UtmOrchestrator.Service.exe" -EA SilentlyContinue).VersionInfo.FileVersion
+$unKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\UtmOrchestrator'
+$unCmd = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$Dst\uninstall.ps1`" -Purge"
+New-Item -Path $unKey -Force | Out-Null
+Set-ItemProperty $unKey DisplayName 'УТМ:Оркестратор'
+if (-not $ver) { $ver = '0.0.0' }
+Set-ItemProperty $unKey DisplayVersion $ver
+Set-ItemProperty $unKey Publisher 'iMironRU'
+Set-ItemProperty $unKey InstallLocation $Dst
+Set-ItemProperty $unKey DisplayIcon "$Dst\UtmOrchestrator.Tray.exe"
+Set-ItemProperty $unKey UninstallString $unCmd
+Set-ItemProperty $unKey QuietUninstallString $unCmd
+Set-ItemProperty $unKey NoModify 1 -Type DWord
+Set-ItemProperty $unKey NoRepair 1 -Type DWord
+Write-Host "  зарегистрирован в «Установка и удаление программ»"
+
 # 4) SCardSvr — Automatic (нужен тёплым для работы с токенами)
 Set-Service SCardSvr -StartupType Automatic
 Start-Service SCardSvr -ErrorAction SilentlyContinue

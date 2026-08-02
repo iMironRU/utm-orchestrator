@@ -24,6 +24,10 @@ Remove-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' 
 Unregister-ScheduledTask -TaskName 'UtmOrchestrator-Tray' -Confirm:$false -ErrorAction SilentlyContinue
 Write-Host "  трей убран из автозагрузки (Run-ключ + задача)"
 
+# убрать из «Установка и удаление программ»
+Remove-Item 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\UtmOrchestrator' -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "  запись в «Программах и компонентах» удалена"
+
 if ($Purge) {
   Remove-Item $Dst -Recurse -Force
   Write-Host "  папка $Dst удалена (данные тоже)" -ForegroundColor Yellow
