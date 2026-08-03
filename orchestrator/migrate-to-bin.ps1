@@ -26,6 +26,8 @@ $flatExe = "$Dst\UtmOrchestrator.Service.exe"
 $dotnet  = "$Dst\bin\runtime\dotnet.exe"
 $svcDll  = "$Dst\bin\app\UtmOrchestrator.Service.dll"
 $trayDll = "$Dst\bin\app\UtmOrchestrator.Tray.dll"
+$trayExe = "$Dst\bin\app\UtmOrchestrator.Tray.exe"   # apphost (GUI, без консоли)
+$rt      = "$Dst\bin\runtime"
 
 function Stop-Tray {
   Get-Process UtmOrchestrator.Tray -EA SilentlyContinue | Stop-Process -Force
@@ -115,15 +117,18 @@ if ((Test-Path "$Dst\utm-dist") -and -not (Test-Path "$Dst\cache\utm-dist")) {
 sc.exe config $ServiceName binPath= "`"$dotnet`" `"$svcDll`"" | Out-Null
 Write-Host "  служба перенацелена на приватный рантайм"
 
-# 6) автозапуск трея → муксер
-$trayCmd = "`"$dotnet`" `"$trayDll`""
-New-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name UtmOrchestratorTray -Value $trayCmd -PropertyType String -Force | Out-Null
+# 6) автозапуск трея → apphost Tray.exe (GUI, БЕЗ консольного окна).
+#    Муксер `dotnet.exe Tray.dll` показывал бы чёрное окно консоли (и закрытие его гасило трей).
+#    apphost находит приватный рантайм через DOTNET_ROOT (ставим пользователю, чтобы автозапуск видел).
+[Environment]::SetEnvironmentVariable('DOTNET_ROOT', $rt, 'User')
+$env:DOTNET_ROOT = $rt
+New-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name UtmOrchestratorTray -Value "`"$trayExe`"" -PropertyType String -Force | Out-Null
 try {
   # Интерактивный оператор (а не тот, чьими правами повысились через UAC) — иначе
   # задача автозапуска трея зарегистрируется на чужого пользователя и не сработает.
   $who = (Get-CimInstance Win32_ComputerSystem -EA SilentlyContinue).UserName
   if (-not $who) { $who = "$env:USERDOMAIN\$env:USERNAME" }
-  $act = New-ScheduledTaskAction -Execute $dotnet -Argument "`"$trayDll`""
+  $act = New-ScheduledTaskAction -Execute $trayExe
   $trg = New-ScheduledTaskTrigger -AtLogOn -User $who; $trg.Delay = 'PT15S'
   $prn = New-ScheduledTaskPrincipal -UserId $who -LogonType Interactive -RunLevel Limited
   Register-ScheduledTask -TaskName 'UtmOrchestrator-Tray' -Action $act -Trigger $trg -Principal $prn -Force | Out-Null
@@ -135,7 +140,7 @@ if (Test-Path $unKey) { Set-ItemProperty $unKey DisplayIcon "$Dst\bin\app\UtmOrc
 
 # 8) старт
 Start-Service $ServiceName
-Start-Process -FilePath $dotnet -ArgumentList "`"$trayDll`"" -EA SilentlyContinue
+Start-Process -FilePath $trayExe -EA SilentlyContinue   # apphost, без консоли ($env:DOTNET_ROOT уже задан)
 
 Write-Host ""
 Write-Host "Миграция выполнена." -ForegroundColor Green

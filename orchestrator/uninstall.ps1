@@ -24,6 +24,9 @@ Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" -EA SilentlyContinue |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
 Remove-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name UtmOrchestratorTray -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName 'UtmOrchestrator-Tray' -Confirm:$false -ErrorAction SilentlyContinue
+# убрать DOTNET_ROOT пользователя, если он указывал на наш приватный рантайм
+$dr = [Environment]::GetEnvironmentVariable('DOTNET_ROOT','User')
+if ($dr -and $dr -like "$Dst*") { [Environment]::SetEnvironmentVariable('DOTNET_ROOT', $null, 'User') }
 Write-Host "  трей убран из автозагрузки"
 
 # из «Установка и удаление программ»

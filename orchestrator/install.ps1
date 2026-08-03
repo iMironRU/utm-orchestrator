@@ -14,8 +14,12 @@ try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $dotnet  = "$Dst\bin\runtime\dotnet.exe"
 $svcDll  = "$Dst\bin\app\UtmOrchestrator.Service.dll"
 $trayDll = "$Dst\bin\app\UtmOrchestrator.Tray.dll"
+$trayExe = "$Dst\bin\app\UtmOrchestrator.Tray.exe"   # apphost (GUI, без консоли)
+$rt      = "$Dst\bin\runtime"
 
 function Stop-Tray {
+  # и apphost (UtmOrchestrator.Tray.exe), и старый муксер-вариант (dotnet.exe Tray.dll)
+  Get-Process UtmOrchestrator.Tray -EA SilentlyContinue | Stop-Process -Force -EA SilentlyContinue
   Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" -EA SilentlyContinue |
     Where-Object { $_.CommandLine -like '*UtmOrchestrator.Tray.dll*' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
@@ -55,12 +59,16 @@ if (-not (Get-Service UtmOrchestrator -ErrorAction SilentlyContinue)) {
 Set-Service SCardSvr -StartupType Automatic
 Start-Service SCardSvr -ErrorAction SilentlyContinue
 
-# 5) трей в автозагрузку (Run-ключ + задача «при входе»), запуск через муксер
-$trayCmd = "`"$dotnet`" `"$trayDll`""
+# 5) трей в автозагрузку (Run-ключ + задача «при входе») — apphost Tray.exe, БЕЗ консоли.
+#    Муксер `dotnet.exe Tray.dll` показывал бы чёрное окно консоли. apphost находит
+#    приватный рантайм через DOTNET_ROOT (ставим пользователю, чтобы автозапуск его видел).
+[Environment]::SetEnvironmentVariable('DOTNET_ROOT', $rt, 'User')
+$env:DOTNET_ROOT = $rt
 New-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' `
-  -Name UtmOrchestratorTray -Value $trayCmd -PropertyType String -Force | Out-Null
-$who = "$env:USERDOMAIN\$env:USERNAME"
-$act = New-ScheduledTaskAction -Execute $dotnet -Argument "`"$trayDll`""
+  -Name UtmOrchestratorTray -Value "`"$trayExe`"" -PropertyType String -Force | Out-Null
+$who = (Get-CimInstance Win32_ComputerSystem -EA SilentlyContinue).UserName
+if (-not $who) { $who = "$env:USERDOMAIN\$env:USERNAME" }
+$act = New-ScheduledTaskAction -Execute $trayExe
 $trg = New-ScheduledTaskTrigger -AtLogOn -User $who
 $trg.Delay = 'PT15S'
 $prn = New-ScheduledTaskPrincipal -UserId $who -LogonType Interactive -RunLevel Limited
@@ -89,7 +97,7 @@ Write-Host "  зарегистрирован в «Установка и удал
 
 # 7) запустить
 Start-Service UtmOrchestrator
-Start-Process -FilePath $dotnet -ArgumentList "`"$trayDll`""
+Start-Process -FilePath $trayExe   # apphost, без консоли ($env:DOTNET_ROOT уже задан)
 
 Write-Host ""
 Write-Host "Готово. Откройте панель: http://localhost:8090" -ForegroundColor Green
