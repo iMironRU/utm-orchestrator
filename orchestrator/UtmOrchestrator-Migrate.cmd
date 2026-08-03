@@ -7,6 +7,7 @@ REM  Double-click: migrate a FLAT UtmOrchestrator install to the new bin layout,
 REM  downloading the LATEST release from GitHub. Elevates via UAC.
 REM  Safe and REVERSIBLE: old files are kept; rollback command is printed at the end.
 REM  On a machine already on bin, migrate-to-bin.ps1 detects it and does nothing.
+REM  A full log is written to C:\UtmOrchestrator-Migrate.log - send it if anything breaks.
 REM  (This wrapper is ASCII-only on purpose; the rich Russian output comes from
 REM   migrate-to-bin.ps1, which is UTF-8 with BOM and renders correctly.)
 REM ============================================================================
@@ -20,25 +21,40 @@ if %errorlevel% neq 0 (
 )
 
 echo === UTM Orchestrator: migrate flat -^> bin (latest release) ===
+echo Log: C:\UtmOrchestrator-Migrate.log
 echo.
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='Stop';" ^
   "$ProgressPreference='SilentlyContinue';" ^
   "try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {};" ^
-  "$h=@{'User-Agent'='utmo'};" ^
-  "$rel=Invoke-RestMethod 'https://api.github.com/repos/iMironRU/utm-orchestrator/releases/latest' -Headers $h -TimeoutSec 30;" ^
-  "$a=$rel.assets | Where-Object { $_.name -like 'UtmOrchestrator-win-x64-*.zip' } | Select-Object -First 1;" ^
-  "if(-not $a){ throw 'monolith UtmOrchestrator-win-x64-*.zip not found in latest release' };" ^
-  "$w=Join-Path $env:TEMP ('utmo-'+$rel.tag_name);" ^
-  "if(Test-Path $w){ [System.IO.Directory]::Delete($w,$true) };" ^
-  "New-Item -ItemType Directory -Force $w | Out-Null;" ^
-  "Write-Host ('Release '+$rel.tag_name+'. Downloading '+$a.name+' ('+[math]::Round($a.size/1MB)+' MB)...') -ForegroundColor Cyan;" ^
-  "Invoke-WebRequest $a.browser_download_url -OutFile (Join-Path $w 'pkg.zip') -UseBasicParsing;" ^
-  "Write-Host 'Extracting...' -ForegroundColor Cyan;" ^
-  "Expand-Archive (Join-Path $w 'pkg.zip') (Join-Path $w 'x') -Force;" ^
-  "& (Join-Path $w 'x\migrate-to-bin.ps1') -OfferCleanup"
+  "$log='C:\UtmOrchestrator-Migrate.log';" ^
+  "try { Start-Transcript -Path $log -Append | Out-Null } catch {};" ^
+  "Write-Host ('=== '+(Get-Date).ToString('yyyy-MM-dd HH:mm:ss')+' migrate run on '+$env:COMPUTERNAME+' ===');" ^
+  "try {" ^
+  "  $h=@{'User-Agent'='utmo'};" ^
+  "  $rel=Invoke-RestMethod 'https://api.github.com/repos/iMironRU/utm-orchestrator/releases/latest' -Headers $h -TimeoutSec 30;" ^
+  "  $a=$rel.assets | Where-Object { $_.name -like 'UtmOrchestrator-win-x64-*.zip' } | Select-Object -First 1;" ^
+  "  if(-not $a){ throw 'monolith UtmOrchestrator-win-x64-*.zip not found in latest release' };" ^
+  "  $w=Join-Path $env:TEMP ('utmo-'+$rel.tag_name);" ^
+  "  if(Test-Path $w){ [System.IO.Directory]::Delete($w,$true) };" ^
+  "  New-Item -ItemType Directory -Force $w | Out-Null;" ^
+  "  Write-Host ('Release '+$rel.tag_name+'. Downloading '+$a.name+' ('+[math]::Round($a.size/1MB)+' MB)...') -ForegroundColor Cyan;" ^
+  "  Invoke-WebRequest $a.browser_download_url -OutFile (Join-Path $w 'pkg.zip') -UseBasicParsing;" ^
+  "  Write-Host 'Extracting...' -ForegroundColor Cyan;" ^
+  "  Expand-Archive (Join-Path $w 'pkg.zip') (Join-Path $w 'x') -Force;" ^
+  "  & (Join-Path $w 'x\migrate-to-bin.ps1') -OfferCleanup;" ^
+  "} catch {" ^
+  "  Write-Host ('ERROR: '+$_.Exception.Message) -ForegroundColor Red;" ^
+  "  Write-Host ($_.ScriptStackTrace) -ForegroundColor DarkGray;" ^
+  "} finally {" ^
+  "  try { Stop-Transcript | Out-Null } catch {};" ^
+  "}"
 
 echo.
-echo Done. You can close this window.
+echo ============================================================
+echo  Log saved to: C:\UtmOrchestrator-Migrate.log
+echo  If anything went wrong, send this file.
+echo ============================================================
+echo.
 pause
