@@ -44,14 +44,25 @@ for loc in cs de es fr it ja ko pl pt-BR ru tr zh-Hans zh-Hant; do rm -rf "$APP/
 find "$APP/bin/app" -maxdepth 1 -name '*.pdb' -delete
 rm -f "$APP/bin/app/web.config"
 
-echo "=== приватный .NET-рантайм (dotnet + host + shared) → $RT/bin/runtime ==="
+echo "=== приватный .NET-рантайм (dotnet + host + shared, только net8.0) → $RT/bin/runtime ==="
 if [ -n "${DOTNET_ROOT:-}" ]; then DOTNET_DIR="$DOTNET_ROOT"; else DOTNET_DIR=$(dirname "$DOTNET"); fi
 RTB="$RT/bin/runtime"
 cp "$DOTNET_DIR/dotnet.exe" "$RTB/"
 cp -r "$DOTNET_DIR/host" "$RTB/"
 mkdir -p "$RTB/shared"
-cp -r "$DOTNET_DIR/shared/Microsoft.NETCore.App"    "$RTB/shared/"
-cp -r "$DOTNET_DIR/shared/Microsoft.AspNetCore.App" "$RTB/shared/"
+# Кладём ТОЛЬКО целевой мажор net8.0: последнюю 8.0.x каждого фреймворка.
+#  - WindowsDesktop.App обязателен: трей на WinForms без него падает (No frameworks were found).
+#  - На CI-раннере в shared лежат 8/9/10 — без фильтра рантайм раздувается в разы (~400 МБ).
+TARGET_MAJOR="8.0"
+for fw in Microsoft.NETCore.App Microsoft.AspNetCore.App Microsoft.WindowsDesktop.App; do
+  srcfw="$DOTNET_DIR/shared/$fw"
+  if [ ! -d "$srcfw" ]; then echo "ОШИБКА: нет $fw в $DOTNET_DIR/shared"; exit 1; fi
+  ver=$(ls -1 "$srcfw" | grep -E "^${TARGET_MAJOR}\.[0-9]+$" | sort -V | tail -1)
+  if [ -z "$ver" ]; then echo "ОШИБКА: нет ${TARGET_MAJOR}.x для $fw (есть: $(ls -1 "$srcfw" | tr '\n' ' '))"; exit 1; fi
+  mkdir -p "$RTB/shared/$fw"
+  cp -r "$srcfw/$ver" "$RTB/shared/$fw/"
+  echo "  $fw → $ver"
+done
 
 # Скрипты установки/обновления/миграции + однокликовый .cmd — в КОРЕНЬ app-пейлоада.
 cp install.ps1 uninstall.ps1 update.ps1 migrate-to-bin.ps1 UtmOrchestrator-Migrate.cmd "$APP/" 2>/dev/null || true

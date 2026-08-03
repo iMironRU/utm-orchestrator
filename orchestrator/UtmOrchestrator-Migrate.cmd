@@ -37,11 +37,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "Invoke-WebRequest $a.browser_download_url -OutFile (Join-Path $w 'pkg.zip') -UseBasicParsing;" ^
   "Write-Host 'Extracting...' -ForegroundColor Cyan;" ^
   "Expand-Archive (Join-Path $w 'pkg.zip') (Join-Path $w 'x') -Force;" ^
-  "& (Join-Path $w 'x\migrate-to-bin.ps1');" ^
-  "$rb=(Join-Path $w 'x\migrate-to-bin.ps1');" ^
-  "try{ Start-Sleep 6; $s=Invoke-RestMethod 'http://127.0.0.1:8090/api/status' -TimeoutSec 20; Write-Host ('RESULT: '+$s.ok+'/'+$s.total+' running, version '+$s.orchestratorVersion) -ForegroundColor Green }catch{ Write-Host 'Panel not up yet - open http://localhost:8090 in a minute' -ForegroundColor Yellow };" ^
-  "Write-Host '';" ^
-  "Write-Host ('Rollback (if needed): powershell -ExecutionPolicy Bypass -File \"'+$rb+'\" -Rollback') -ForegroundColor DarkGray"
+  "& (Join-Path $w 'x\migrate-to-bin.ps1') -OfferCleanup"
 
 echo.
 echo Done. You can close this window.

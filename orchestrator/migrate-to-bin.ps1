@@ -15,7 +15,8 @@ param(
   [string]$Dst = 'C:\UtmOrchestrator',
   [string]$ServiceName = 'UtmOrchestrator',
   [switch]$Cleanup,      # удалить старые плоские файлы (после успешной проверки)
-  [switch]$Rollback      # вернуть службу на старый плоский exe
+  [switch]$Rollback,     # вернуть службу на старый плоский exe
+  [switch]$OfferCleanup  # после миграции спросить и по «да» сразу почистить старые файлы
 )
 $ErrorActionPreference = 'Stop'
 $src = $PSScriptRoot
@@ -118,7 +119,10 @@ Write-Host "  служба перенацелена на приватный ра
 $trayCmd = "`"$dotnet`" `"$trayDll`""
 New-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name UtmOrchestratorTray -Value $trayCmd -PropertyType String -Force | Out-Null
 try {
-  $who = "$env:USERDOMAIN\$env:USERNAME"
+  # Интерактивный оператор (а не тот, чьими правами повысились через UAC) — иначе
+  # задача автозапуска трея зарегистрируется на чужого пользователя и не сработает.
+  $who = (Get-CimInstance Win32_ComputerSystem -EA SilentlyContinue).UserName
+  if (-not $who) { $who = "$env:USERDOMAIN\$env:USERNAME" }
   $act = New-ScheduledTaskAction -Execute $dotnet -Argument "`"$trayDll`""
   $trg = New-ScheduledTaskTrigger -AtLogOn -User $who; $trg.Delay = 'PT15S'
   $prn = New-ScheduledTaskPrincipal -UserId $who -LogonType Interactive -RunLevel Limited
@@ -134,6 +138,26 @@ Start-Service $ServiceName
 Start-Process -FilePath $dotnet -ArgumentList "`"$trayDll`"" -EA SilentlyContinue
 
 Write-Host ""
-Write-Host "Миграция выполнена. Проверьте панель (http://localhost:8090) и статус УТМ." -ForegroundColor Green
-Write-Host "Старые плоские файлы оставлены (для отката). Если всё ок — почистить: migrate-to-bin.ps1 -Cleanup" -ForegroundColor Cyan
-Write-Host "Откат (если что): migrate-to-bin.ps1 -Rollback" -ForegroundColor Cyan
+Write-Host "Миграция выполнена." -ForegroundColor Green
+
+if ($OfferCleanup) {
+  # Дать службе/трею подняться и показать состояние панели перед предложением чистки.
+  Start-Sleep 6
+  try {
+    $s = Invoke-RestMethod 'http://127.0.0.1:8090/api/status' -TimeoutSec 20
+    Write-Host ("Панель: {0}/{1} работают, версия {2}" -f $s.ok, $s.total, $s.orchestratorVersion) -ForegroundColor Green
+  } catch {
+    Write-Host "Панель ещё поднимается — откройте http://localhost:8090 через минуту." -ForegroundColor Yellow
+  }
+  Write-Host ""
+  $ans = Read-Host "Удалить старые плоские файлы сейчас? После этого откат будет невозможен. (y = да, Enter = позже)"
+  if ($ans -match '^[yYдД]') {
+    & $PSCommandPath -Dst $Dst -ServiceName $ServiceName -Cleanup
+  } else {
+    Write-Host "Старые файлы оставлены. Откат: migrate-to-bin.ps1 -Rollback . Почистить позже: migrate-to-bin.ps1 -Cleanup" -ForegroundColor Cyan
+  }
+} else {
+  Write-Host "Проверьте панель (http://localhost:8090) и статус УТМ." -ForegroundColor Green
+  Write-Host "Старые плоские файлы оставлены (для отката). Если всё ок — почистить: migrate-to-bin.ps1 -Cleanup" -ForegroundColor Cyan
+  Write-Host "Откат (если что): migrate-to-bin.ps1 -Rollback" -ForegroundColor Cyan
+}
