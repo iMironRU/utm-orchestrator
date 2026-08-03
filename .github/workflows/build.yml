@@ -1,8 +1,9 @@
 name: Build
 
-# Каждый пуш в main = версионный релиз v0.1.N (N = номер сборки CI), помеченный
-# как latest (не pre-release — мы вышли из альфы). Версия зашивается в exe и в
-# имена файлов. Setup.exe тянет пейлоад из последнего релиза через GitHub API.
+# Каждый пуш в main = версионный релиз v0.2.N, помеченный как latest (не pre-release).
+# N = номер сборки CI за вычетом базы 116 (последний релиз линейки 0.1 = 0.1.116),
+# поэтому линейка 0.2 стартует с 0.2.1. Версия зашивается в exe и в имена файлов.
+# Setup.exe тянет пейлоад из последнего релиза через GitHub API.
 
 on:
   push:
@@ -23,10 +24,10 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Compute version (0.1.N)
+      - name: Compute version (0.2.N)
         id: ver
         shell: bash
-        run: echo "v=0.1.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+        run: echo "v=0.2.$(( ${{ github.run_number }} - 116 ))" >> "$GITHUB_OUTPUT"
 
       - name: Publish split payload (app + runtime, self-contained win-x64)
         working-directory: orchestrator
