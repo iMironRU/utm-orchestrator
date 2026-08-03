@@ -102,3 +102,4 @@ jobs:
             UtmOrchestrator-runtime-${{ steps.rt.outputs.key }}-win-x64.zip
             UtmOrchestrator-win-x64-${{ steps.ver.outputs.v }}.zip
             UtmOrchestrator-Setup-${{ steps.ver.outputs.v }}.exe
+            orchestrator/UtmOrchestrator-Migrate.cmd
