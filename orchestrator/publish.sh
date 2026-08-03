@@ -53,8 +53,8 @@ mkdir -p "$RTB/shared"
 cp -r "$DOTNET_DIR/shared/Microsoft.NETCore.App"    "$RTB/shared/"
 cp -r "$DOTNET_DIR/shared/Microsoft.AspNetCore.App" "$RTB/shared/"
 
-# Скрипты установки/обновления — в КОРЕНЬ app-пейлоада (Setup/самообновление видят рядом).
-cp install.ps1 uninstall.ps1 update.ps1 "$APP/" 2>/dev/null || true
+# Скрипты установки/обновления/миграции — в КОРЕНЬ app-пейлоада.
+cp install.ps1 uninstall.ps1 update.ps1 migrate-to-bin.ps1 "$APP/" 2>/dev/null || true
 
 # innoextract — рядом с нашим кодом (bin/app/tools).
 if [ -d tools ]; then mkdir -p "$APP/bin/app/tools"; cp -r tools/. "$APP/bin/app/tools/"; fi
