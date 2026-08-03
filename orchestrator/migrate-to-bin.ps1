@@ -50,23 +50,37 @@ if ($Rollback) {
 # ============ ЧИСТКА старых плоских файлов (после успешной миграции) ============
 if ($Cleanup) {
   if (-not (Test-Path $svcDll)) { throw "bin\app не найден — сначала выполните миграцию (без -Cleanup)" }
+  # Чистить можно только когда служба УЖЕ на муксере: иначе плоский exe запущен и держит
+  # свои рантайм-DLL (clrjit/coreclr/hostfxr) — удаление упадёт, а служба останется на flat.
+  $curBin = (Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -EA SilentlyContinue).PathName
+  if ($curBin -notlike '*\bin\runtime\dotnet.exe*') {
+    throw "служба ещё на плоском exe (binPath=$curBin). Сначала завершите миграцию, затем -Cleanup."
+  }
   Write-Host "ЧИСТКА старых плоских файлов в корне (bin/data/utms/cache/transfer сохраняю)" -ForegroundColor Yellow
+  $failed = @()
   # Удаляем известный мусор плоской раскладки в КОРНЕ, не трогая новую структуру.
   foreach ($f in Get-ChildItem "$Dst\*" -File -EA SilentlyContinue) {
     if ($f.Name -in @('runtime.key') -or $f.Extension -eq '.ps1' -or $f.Name -eq 'appsettings.json') { continue }
-    if ($f.Extension -in @('.dll','.exe','.pdb','.json','.config','.xml')) { [System.IO.File]::Delete($f.FullName) }
+    if ($f.Extension -in @('.dll','.exe','.pdb','.json','.config','.xml')) {
+      try { [System.IO.File]::Delete($f.FullName) } catch { $failed += $f.Name }
+    }
   }
   foreach ($d in Get-ChildItem "$Dst\*" -Directory -EA SilentlyContinue) {
     if ($d.Name -in @('bin','data','utms','cache','transfer')) { continue }
-    [System.IO.Directory]::Delete($d.FullName, $true)   # wwwroot, cs/de/…, utm-dist, exports, imports (старые)
+    try { [System.IO.Directory]::Delete($d.FullName, $true) } catch { $failed += $d.Name }   # wwwroot, cs/de/…, utm-dist, exports, imports (старые)
   }
+  if ($failed) { Write-Host "  не удалось удалить (заняты?): $($failed -join ', ') — повторите -Cleanup позже" -ForegroundColor Yellow }
   Write-Host "Готово. В корне: $((Get-ChildItem $Dst -Directory | % Name) -join ', ')" -ForegroundColor Green
   return
 }
 
 # ============ МИГРАЦИЯ (обратимая: старые файлы НЕ трогаем) ============
-if (Test-Path $svcDll) { Write-Host "Уже bin-раскладка — миграция не нужна."; return }
-if (-not (Test-Path $flatExe)) { throw "не похоже на плоскую установку ($flatExe не найден)" }
+# Идемпотентно: если bin\ уже есть, но служба на плоском exe (например после -Rollback),
+# повторный запуск ДОЛЖЕН заново перенацелить её на муксер, а не выходить без изменений.
+$curBin  = (Get-CimInstance Win32_Service -Filter "Name='$ServiceName'" -EA SilentlyContinue).PathName
+$onMuxer = $curBin -like '*\bin\runtime\dotnet.exe*'
+if ((Test-Path $svcDll) -and $onMuxer) { Write-Host "Уже bin-раскладка, служба на муксере — миграция не нужна."; return }
+if (-not (Test-Path $svcDll) -and -not (Test-Path $flatExe)) { throw "не похоже на установку оркестратора (нет ни $flatExe, ни bin\app)" }
 
 Write-Host "Миграция плоской установки → bin: $Dst" -ForegroundColor Cyan
 
