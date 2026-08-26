@@ -1438,10 +1438,16 @@ app.MapPost("/api/update/apply", async (CancellationToken ct) =>
             string staging = Path.Combine(tmp, "staging");
             Directory.CreateDirectory(staging);
 
-            // Дефолтный клиент УВАЖАЕТ системный прокси: внешние загрузки с github.com
-            // в фильтрованных/корпоративных сетях идут через прокси (прямой TLS к CDN
-            // релизов там режется). Обход прокси нужен только для localhost/LAN, не тут.
-            using var h = new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+            // Загрузка релизов идёт через прокси ПОЛЬЗОВАТЕЛЯ (в РФ GitHub часто доступен
+            // только так; служба-LocalSystem сама «ходит напрямую» и ловит 403). Резолвер —
+            // тот же, что у проверки обновлений.
+            var (dlProxy, _) = UtmOrchestrator.Core.Update.GitHubProxy.Resolve();
+            using var h = new HttpClient(new SocketsHttpHandler
+            {
+                UseProxy = dlProxy is not null,
+                Proxy = dlProxy,
+                DefaultProxyCredentials = System.Net.CredentialCache.DefaultCredentials,
+            }) { Timeout = TimeSpan.FromMinutes(10) };
             async Task Download(string url, string zipName)
             {
                 string zip = Path.Combine(tmp, zipName);
