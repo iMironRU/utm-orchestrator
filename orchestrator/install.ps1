@@ -33,9 +33,17 @@ if ($svc -and $svc.Status -ne 'Stopped') { Stop-Service UtmOrchestrator -Force }
 Stop-Tray
 Start-Sleep 2
 
-# 2) скопировать пейлоад (bin\ + runtime.key + uninstall.ps1); данные не трогаем
+# 2) скопировать пейлоад (bin\ + runtime.key + uninstall.ps1); данные не трогаем.
+# С ПРОВЕРКОЙ версий Service.dll==Core.dll: если Core.dll занят треем и не перезаписался —
+# гасим трей ещё раз и повторяем (иначе рассинхрон версий → служба упадёт FileNotFound на Core).
 New-Item -ItemType Directory -Path $Dst -Force | Out-Null
-robocopy "$src\bin" "$Dst\bin" /E /NFL /NDL /NJH /NJS /NC /NS /R:1 /W:1 | Out-Null
+for ($try = 1; $try -le 4; $try++) {
+  robocopy "$src\bin" "$Dst\bin" /E /NFL /NDL /NJH /NJS /NC /NS /R:3 /W:2 | Out-Null
+  $sv = (Get-Item "$Dst\bin\app\UtmOrchestrator.Service.dll" -ErrorAction SilentlyContinue).VersionInfo.FileVersion
+  $cv = (Get-Item "$Dst\bin\app\UtmOrchestrator.Core.dll" -ErrorAction SilentlyContinue).VersionInfo.FileVersion
+  if ($sv -and $sv -eq $cv) { break }
+  Stop-Tray; Start-Sleep 3
+}
 Copy-Item "$src\runtime.key"   "$Dst\runtime.key"   -Force -ErrorAction SilentlyContinue
 Copy-Item "$src\uninstall.ps1" "$Dst\uninstall.ps1" -Force -ErrorAction SilentlyContinue
 Copy-Item "$src\update.ps1"    "$Dst\update.ps1"    -Force -ErrorAction SilentlyContinue

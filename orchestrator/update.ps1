@@ -19,6 +19,10 @@ $svcDll  = "$Dst\bin\app\UtmOrchestrator.Service.dll"
 $trayDll = "$Dst\bin\app\UtmOrchestrator.Tray.dll"
 
 Stop-Service UtmOrchestrator -Force
+# Гасим трей: и apphost (UtmOrchestrator.Tray.exe), и старый муксер-вариант (dotnet.exe Tray.dll).
+# apphost ДЕРЖИТ Core.dll — если его не убить, robocopy не перезапишет Core.dll, и Service.dll
+# новой версии упадёт FileNotFound на Core старой версии (служба не стартует).
+Get-Process UtmOrchestrator.Tray -ErrorAction SilentlyContinue | ForEach-Object { $_.Kill() }
 Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" |
   Where-Object { $_.CommandLine -like '*UtmOrchestrator.Tray.dll*' } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
@@ -26,7 +30,16 @@ Start-Sleep 3
 
 # Копируем новый bin\ (app всегда; runtime — только если был в пейлоаде). data\/utms\/cache\/
 # transfer\ в КОРНЕ не трогаем. appsettings.json (правки пользователя) сохраняем.
-robocopy "$Src\bin" "$Dst\bin" /E /XF appsettings.json /NFL /NDL /NJH /NJS /NC /NS /R:2 /W:1 | Out-Null
+# С ПРОВЕРКОЙ версий Service.dll==Core.dll: если Core.dll был занят и не перезаписался —
+# гасим трей ещё раз и повторяем (иначе рассинхрон версий → служба не стартует).
+for ($try = 1; $try -le 4; $try++) {
+  robocopy "$Src\bin" "$Dst\bin" /E /XF appsettings.json /NFL /NDL /NJH /NJS /NC /NS /R:3 /W:2 | Out-Null
+  $sv = (Get-Item "$Dst\bin\app\UtmOrchestrator.Service.dll" -ErrorAction SilentlyContinue).VersionInfo.FileVersion
+  $cv = (Get-Item "$Dst\bin\app\UtmOrchestrator.Core.dll" -ErrorAction SilentlyContinue).VersionInfo.FileVersion
+  if ($sv -and $sv -eq $cv) { break }
+  Get-Process UtmOrchestrator.Tray -ErrorAction SilentlyContinue | ForEach-Object { $_.Kill() }
+  Start-Sleep 3
+}
 Copy-Item "$Src\runtime.key" "$Dst\runtime.key" -Force
 Copy-Item "$Src\uninstall.ps1" "$Dst\uninstall.ps1" -Force
 
