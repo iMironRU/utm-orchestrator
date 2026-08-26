@@ -977,25 +977,23 @@ app.MapPost("/api/utm/bind", (BindTokenRequest req, SerialCache serials) =>
     if (!string.IsNullOrWhiteSpace(req.Fsrar)) { inst.ExpectedFsrar = req.Fsrar; serials.Learn(req.Fsrar!, req.Serial!); }
     state.Save(OrchestratorState.DefaultPath);
 
+    if (string.IsNullOrWhiteSpace(inst.ReaderName))
+    { ReaderOp.Gate.Release(); return Results.BadRequest(new { error = "у токена нет имени ридера — пересканируйте" }); }
+
     var target = new BootBringUp.Target(inst.ServiceName, inst.Port, req.Serial!, inst.ExpectedFsrar, inst.ReaderName);
+    // ВАЖНО: хирургический подъём ТОЛЬКО этого УТМ (introduce его ридера, работающие
+    // УТМ держат свои токены — им forget не мешает). НЕ BootBringUp.Apply — тот делает
+    // boot-peel-down по ВСЕМ токенам (reset + forget всех) и роняет остальные УТМ.
+    var allReaders = state.Instances.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
 
     _ = Task.Run(() =>
     {
         using var _ = BringUpStatus.Begin();
         try
         {
-            ReaderOp.FileLog($"=== bind: {inst.ServiceName} → токен {req.Serial} (прямая привязка по серийнику) ===");
-            var r = BootBringUp.Apply(new[] { target }, ReaderOp.FileLog);
-            // сохранить фактически наблюдённое имя ридера (на этой машине оно своё)
-            if (r.ReaderBySerial.TryGetValue(req.Serial!, out var rn))
-            {
-                var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
-                var i2 = st.Instances.FirstOrDefault(i =>
-                    string.Equals(i.ServiceName, req.Service, StringComparison.OrdinalIgnoreCase));
-                if (i2 is not null && !string.Equals(i2.ReaderName, rn, StringComparison.OrdinalIgnoreCase))
-                { i2.ReaderName = rn; st.Save(OrchestratorState.DefaultPath); }
-            }
-            ReaderOp.FileLog($"bind: поднято {r.Started.Count}, ошибок {r.Failed.Count}");
+            ReaderOp.FileLog($"=== bind: {inst.ServiceName} → токен {req.Serial} (хирургически, других УТМ не трогаем) ===");
+            bool up = BootBringUp.RestartOne(target, allReaders, ReaderOp.FileLog);
+            ReaderOp.FileLog($"bind: {(up ? "поднят" : "НЕ поднялся")} {inst.ServiceName}");
         }
         catch (Exception e) { ReaderOp.FileLog($"bind: СБОЙ — {e}"); }
         finally { ReaderOp.Gate.Release(); }
