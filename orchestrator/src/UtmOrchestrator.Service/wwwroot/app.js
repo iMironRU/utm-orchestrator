@@ -791,31 +791,62 @@
     // ФСРАР в КЭП не пишется). Показываем ТОЛЬКО для неработающего УТМ (у живого не трогаем).
     var rebindBlock = '';
     if (sel.status !== 'ok') {
-      var tokRows = '';
-      if (state.scannedTokens && state.scannedTokens.length) {
-        tokRows = state.scannedTokens.map(function (t) {
-          if (!t.serial) return '';
-          var isCur = sel.tokenSerial && String(t.serial).toLowerCase() === String(sel.tokenSerial).toLowerCase();
-          var act = isCur
-            ? '<span style="font:600 12px system-ui,sans-serif;color:' + c.ok + ';white-space:nowrap;">привязан</span>'
-            : (t.reader
-                ? '<button data-action="bindToken" data-service="' + esc(sel.service) + '" data-serial="' + esc(t.serial) + '" data-fsrar="' + esc(t.fsrar || '') + '" data-reader="' + esc(t.reader) + '" style="background:' + c.brand + ';border:none;color:#fff;padding:6px 13px;border-radius:7px;font:600 12px system-ui,sans-serif;cursor:pointer;white-space:nowrap;">Привязать</button>'
-                : '<span style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';white-space:nowrap;">нет ридера</span>');
-          return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;background:' + c.subtleBg + ';border-radius:8px;">' +
-            '<div style="min-width:0;"><div style="font:12.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textPrimary + ';overflow:hidden;text-overflow:ellipsis;">Rutoken · ' + esc(t.serial) + '</div>' +
-            '<div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';">ФСРАР ' + esc(t.fsrar || '—') + ' · ридер ' + esc(t.reader || '—') + '</div></div>' +
-            act + '</div>';
-        }).join('');
+      // Карта: серийник -> УТМ, к которому он уже привязан (по живому статусу).
+      var boundBy = {};
+      ((state.liveStatus && state.liveStatus.instances) || []).forEach(function (i) {
+        if (i.serial) boundBy[String(i.serial).toLowerCase()] = i;
+      });
+      var toks = (state.scannedTokens || []).filter(function (t) { return t.serial; });
+      var curSerial = sel.tokenSerial ? String(sel.tokenSerial).toLowerCase() : '';
+      var free = [], bound = [], curTok = null;
+      toks.forEach(function (t) {
+        var s = String(t.serial).toLowerCase();
+        if (s === curSerial) { curTok = t; return; }
+        if (boundBy[s]) bound.push(t); else free.push(t);
+      });
+      // Пустые (без ФСРАР) — вперёд: при замене токена это типичные кандидаты.
+      free.sort(function (a, b) { return (a.fsrar ? 1 : 0) - (b.fsrar ? 1 : 0); });
+
+      var tokRow = function (t, actionHtml, dim) {
+        var empty = !t.fsrar ? '<span style="font:10.5px system-ui,sans-serif;color:' + c.textTertiary + ';border:1px solid ' + c.border + ';border-radius:5px;padding:1px 5px;margin-left:6px;">без ФСРАР</span>' : '';
+        return '<div style="' + (dim ? 'opacity:.55;' : '') + 'display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;background:' + c.subtleBg + ';border-radius:8px;">' +
+          '<div style="min-width:0;"><div style="font:12.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textPrimary + ';overflow:hidden;text-overflow:ellipsis;">Rutoken · ' + esc(t.serial) + empty + '</div>' +
+          '<div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';">ФСРАР ' + esc(t.fsrar || '—') + ' · ридер ' + esc(t.reader || '—') + '</div></div>' + actionHtml + '</div>';
+      };
+      var bindBtn = function (t) {
+        return t.reader
+          ? '<button data-action="bindToken" data-service="' + esc(sel.service) + '" data-serial="' + esc(t.serial) + '" data-fsrar="' + esc(t.fsrar || '') + '" data-reader="' + esc(t.reader) + '" style="background:' + c.brand + ';border:none;color:#fff;padding:6px 13px;border-radius:7px;font:600 12px system-ui,sans-serif;cursor:pointer;white-space:nowrap;">Привязать</button>'
+          : '<span style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';white-space:nowrap;">нет ридера</span>';
+      };
+
+      var tokList = '';
+      if (state.scannedTokens) {
+        if (!toks.length) {
+          tokList = '<div style="font:11.5px system-ui,sans-serif;color:' + c.textTertiary + ';">Токены не найдены. Вставьте токен в USB и повторите скан.</div>';
+        } else {
+          var curRow = curTok ? tokRow(curTok, '<span style="font:600 12px system-ui,sans-serif;color:' + c.ok + ';white-space:nowrap;">привязан</span>', false) : '';
+          var freeRows = free.map(function (t) { return tokRow(t, bindBtn(t), false); }).join('');
+          if (!free.length && !curRow) freeRows = '<div style="font:11.5px system-ui,sans-serif;color:' + c.textTertiary + ';">Свободных токенов нет. Вставьте новый и пересканируйте.</div>';
+          var boundBlock = '';
+          if (bound.length) {
+            var toggle = '<div data-action="toggleBindBound" style="font:11.5px system-ui,sans-serif;color:' + c.brand + ';cursor:pointer;user-select:none;">' +
+              (state.bindShowBound ? '▲ скрыть привязанные (' + bound.length + ')' : '▼ показать привязанные (' + bound.length + ')') + '</div>';
+            var boundList = state.bindShowBound ? bound.map(function (t) {
+              var u = boundBy[String(t.serial).toLowerCase()];
+              return tokRow(t, '<span style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';white-space:nowrap;">занят · порт ' + esc(u.port) + '</span>', true);
+            }).join('') : '';
+            boundBlock = toggle + boundList;
+          }
+          tokList = curRow + freeRows + boundBlock;
+        }
       }
       var scanBtn2 = state.scanning
         ? '<button disabled style="opacity:.6;background:' + c.brand + ';border:none;color:#fff;padding:8px 14px;border-radius:8px;font:600 12px system-ui,sans-serif;">Сканирую…</button>'
         : '<button data-action="scanTokens" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12px system-ui,sans-serif;cursor:pointer;">' + (state.scannedTokens ? 'Пересканировать токены' : 'Сканировать токены') + '</button>';
-      var noTok = (state.scannedTokens && !state.scannedTokens.length)
-        ? '<div style="font:11.5px system-ui,sans-serif;color:' + c.textTertiary + ';">Токены не найдены. Вставьте токен в USB и повторите скан.</div>' : '';
       rebindBlock = '<div style="display:flex;flex-direction:column;gap:9px;padding:14px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
         '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Привязать токен</div>' +
-        '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Заменили токен? Вставьте новый, отсканируйте и привяжите к этому УТМ по серийнику — УТМ поднимется на нём (~1-2 мин). ФСРАР в сертификате не требуется.</div>' +
-        '<div>' + scanBtn2 + '</div>' + noTok + tokRows +
+        '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Заменили токен? Вставьте новый, отсканируйте и привяжите к этому УТМ по серийнику — УТМ поднимется (~1-2 мин). ФСРАР в сертификате не требуется. Показаны свободные токены; уже привязанные — под спойлером.</div>' +
+        '<div>' + scanBtn2 + '</div>' + tokList +
       '</div>';
     }
 
@@ -2271,6 +2302,9 @@
           .catch(function () { showToast('Не удалось привязать токен'); });
       });
     },
+
+    /* Спойлер «показать привязанные» в блоке привязки токена. */
+    toggleBindBound: function () { setState({ bindShowBound: !state.bindShowBound }); },
 
     /* Подхватить существующие УТМ под управление (первый запуск): строит state.json
        из обнаруженных служб + отсканированных токенов. */
