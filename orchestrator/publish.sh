@@ -65,7 +65,7 @@ for fw in Microsoft.NETCore.App Microsoft.AspNetCore.App Microsoft.WindowsDeskto
 done
 
 # Скрипты установки/обновления/миграции + однокликовый .cmd — в КОРЕНЬ app-пейлоада.
-cp install.ps1 uninstall.ps1 update.ps1 migrate-to-bin.ps1 UtmOrchestrator-Migrate.cmd "$APP/" 2>/dev/null || true
+cp install.ps1 uninstall.ps1 update.ps1 migrate-to-bin.ps1 update-machine.ps1 UtmOrchestrator-Migrate.cmd "$APP/" 2>/dev/null || true
 
 # innoextract — рядом с нашим кодом (bin/app/tools).
 if [ -d tools ]; then mkdir -p "$APP/bin/app/tools"; cp -r tools/. "$APP/bin/app/tools/"; fi

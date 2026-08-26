@@ -103,3 +103,4 @@ jobs:
             UtmOrchestrator-win-x64-${{ steps.ver.outputs.v }}.zip
             UtmOrchestrator-Setup-${{ steps.ver.outputs.v }}.exe
             orchestrator/UtmOrchestrator-Migrate.cmd
+            orchestrator/update-machine.ps1
