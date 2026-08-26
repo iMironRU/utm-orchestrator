@@ -947,6 +947,62 @@ app.MapPost("/api/utm/rebind-all", () =>
     return Results.Accepted(value: new { ok = true, count = targets.Count });
 });
 
+// --- Прямая привязка токена к УТМ по серийнику (без матчинга по ФСРАР) ---
+// Нужно при ЗАМЕНЕ токена (новый серийник) и когда ФСРАР в КЭП не пишется — авто-подхват
+// «по ФСРАР» тогда не сматчит. Пишем новый серийник этому УТМ в state.json и тут же
+// поднимаем ИМЕННО его на этом токене (introduce, session-0-safe). Фон, под общим замком.
+app.MapPost("/api/utm/bind", (BindTokenRequest req, SerialCache serials) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    if (string.IsNullOrWhiteSpace(req.Service) || string.IsNullOrWhiteSpace(req.Serial))
+        return Results.BadRequest(new { error = "нужны service и serial токена" });
+
+    var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var inst = state.Instances.FirstOrDefault(i =>
+        string.Equals(i.ServiceName, req.Service, StringComparison.OrdinalIgnoreCase));
+    if (inst is null) return Results.NotFound(new { error = "УТМ не найден в state.json" });
+
+    // Не даём привязать один токен к двум УТМ.
+    var other = state.Instances.FirstOrDefault(i =>
+        !ReferenceEquals(i, inst) && string.Equals(i.TokenSerial, req.Serial, StringComparison.OrdinalIgnoreCase));
+    if (other is not null)
+        return Results.Conflict(new { error = $"этот токен уже привязан к {other.ServiceName}" });
+
+    if (!ReaderOp.Gate.Wait(0))
+        return Results.Conflict(new { error = "уже идёт операция с ридерами — попробуйте позже" });
+
+    // Пишем привязку СРАЗУ (переживёт даже неудачный подъём — потом можно «Полечить»).
+    inst.TokenSerial = req.Serial;
+    inst.ReaderName = string.IsNullOrWhiteSpace(req.Reader) ? null : req.Reader;
+    if (!string.IsNullOrWhiteSpace(req.Fsrar)) { inst.ExpectedFsrar = req.Fsrar; serials.Learn(req.Fsrar!, req.Serial!); }
+    state.Save(OrchestratorState.DefaultPath);
+
+    var target = new BootBringUp.Target(inst.ServiceName, inst.Port, req.Serial!, inst.ExpectedFsrar, inst.ReaderName);
+
+    _ = Task.Run(() =>
+    {
+        using var _ = BringUpStatus.Begin();
+        try
+        {
+            ReaderOp.FileLog($"=== bind: {inst.ServiceName} → токен {req.Serial} (прямая привязка по серийнику) ===");
+            var r = BootBringUp.Apply(new[] { target }, ReaderOp.FileLog);
+            // сохранить фактически наблюдённое имя ридера (на этой машине оно своё)
+            if (r.ReaderBySerial.TryGetValue(req.Serial!, out var rn))
+            {
+                var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+                var i2 = st.Instances.FirstOrDefault(i =>
+                    string.Equals(i.ServiceName, req.Service, StringComparison.OrdinalIgnoreCase));
+                if (i2 is not null && !string.Equals(i2.ReaderName, rn, StringComparison.OrdinalIgnoreCase))
+                { i2.ReaderName = rn; st.Save(OrchestratorState.DefaultPath); }
+            }
+            ReaderOp.FileLog($"bind: поднято {r.Started.Count}, ошибок {r.Failed.Count}");
+        }
+        catch (Exception e) { ReaderOp.FileLog($"bind: СБОЙ — {e}"); }
+        finally { ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true, service = inst.ServiceName, serial = req.Serial });
+});
+
 // --- Полечить токены: рестарт SCardSvr (будит замёрзшие) + introduce-подъём всех ---
 // Служба (LocalSystem) делает это сама — UAC/трей не нужны. Это НЕ PKCS11-скан, а
 // рестарт службы + introduce (session-0-safe, как boot-подъём). Фон, под общим замком.
@@ -1437,6 +1493,7 @@ record AdoptToken(string? Serial, string? Fsrar, string? Reader);
 record AdoptRequest(List<AdoptToken>? Tokens);
 record LoginRequest(string? Username, string? Password);
 record AddUtmRequest(string? Serial, string? Fsrar, string? Reader, int? Port);
+record BindTokenRequest(string? Service, string? Serial, string? Fsrar, string? Reader);
 record AddAllRequest(List<AdoptToken>? Tokens);
 record BatchServicesRequest(List<string>? Services);
 record ImportCommitRequest(string? Handle, int Port);

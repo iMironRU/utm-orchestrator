@@ -787,11 +787,37 @@
       infoCell('Токен', sel.tokenDisplay, true) +
     '</div>';
 
-    // Перепривязку показываем ТОЛЬКО для неработающего УТМ (у живого её делать нельзя).
-    // Реальная перепривязка (introduce на другой токен) — на подходе; пока честная
-    // пометка вместо фейкового дропдауна «токен привязан».
-    var rebindBlock = (sel.status === 'ok') ? '' :
-      '<div style="font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Перепривязка токена — <b style="color:' + c.textPrimary + ';">в разработке</b>. Пока: «Полечить токены» или перезапуск УТМ.</div>';
+    // Привязка токена к УТМ — прямая, по серийнику (замена токена; работает и когда
+    // ФСРАР в КЭП не пишется). Показываем ТОЛЬКО для неработающего УТМ (у живого не трогаем).
+    var rebindBlock = '';
+    if (sel.status !== 'ok') {
+      var tokRows = '';
+      if (state.scannedTokens && state.scannedTokens.length) {
+        tokRows = state.scannedTokens.map(function (t) {
+          if (!t.serial) return '';
+          var isCur = sel.tokenSerial && String(t.serial).toLowerCase() === String(sel.tokenSerial).toLowerCase();
+          var act = isCur
+            ? '<span style="font:600 12px system-ui,sans-serif;color:' + c.ok + ';white-space:nowrap;">привязан</span>'
+            : (t.reader
+                ? '<button data-action="bindToken" data-service="' + esc(sel.service) + '" data-serial="' + esc(t.serial) + '" data-fsrar="' + esc(t.fsrar || '') + '" data-reader="' + esc(t.reader) + '" style="background:' + c.brand + ';border:none;color:#fff;padding:6px 13px;border-radius:7px;font:600 12px system-ui,sans-serif;cursor:pointer;white-space:nowrap;">Привязать</button>'
+                : '<span style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';white-space:nowrap;">нет ридера</span>');
+          return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;background:' + c.subtleBg + ';border-radius:8px;">' +
+            '<div style="min-width:0;"><div style="font:12.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.textPrimary + ';overflow:hidden;text-overflow:ellipsis;">Rutoken · ' + esc(t.serial) + '</div>' +
+            '<div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';">ФСРАР ' + esc(t.fsrar || '—') + ' · ридер ' + esc(t.reader || '—') + '</div></div>' +
+            act + '</div>';
+        }).join('');
+      }
+      var scanBtn2 = state.scanning
+        ? '<button disabled style="opacity:.6;background:' + c.brand + ';border:none;color:#fff;padding:8px 14px;border-radius:8px;font:600 12px system-ui,sans-serif;">Сканирую…</button>'
+        : '<button data-action="scanTokens" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12px system-ui,sans-serif;cursor:pointer;">' + (state.scannedTokens ? 'Пересканировать токены' : 'Сканировать токены') + '</button>';
+      var noTok = (state.scannedTokens && !state.scannedTokens.length)
+        ? '<div style="font:11.5px system-ui,sans-serif;color:' + c.textTertiary + ';">Токены не найдены. Вставьте токен в USB и повторите скан.</div>' : '';
+      rebindBlock = '<div style="display:flex;flex-direction:column;gap:9px;padding:14px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
+        '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Привязать токен</div>' +
+        '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Заменили токен? Вставьте новый, отсканируйте и привяжите к этому УТМ по серийнику — УТМ поднимется на нём (~1-2 мин). ФСРАР в сертификате не требуется.</div>' +
+        '<div>' + scanBtn2 + '</div>' + noTok + tokRows +
+      '</div>';
+    }
 
     // Действия — строкой в тулбаре наверху (рядом со статусом и «← К списку»).
     var actBtns =
@@ -2215,6 +2241,32 @@
             showToast('Установка запущена — новый УТМ появится в панели через ~1-2 мин');
           })
           .catch(function () { showToast('Не удалось запустить установку'); });
+      });
+    },
+
+    /* Привязать выбранный токен к ЭТОМУ УТМ по серийнику (замена токена).
+       Пишет серийник в state.json и поднимает УТМ на этом токене. */
+    bindToken: function (el) {
+      var service = el.getAttribute('data-service');
+      var serial = el.getAttribute('data-serial');
+      var fsrar = el.getAttribute('data-fsrar') || '';
+      var reader = el.getAttribute('data-reader') || '';
+      if (!serial) return;
+      if (!reader) { showToast('У токена нет ридера — повторите скан'); return; }
+      askConfirm({ title: 'Привязать токен', okLabel: 'Привязать',
+        message: 'Привязать токен ' + serial + ' к этому УТМ?\nОркестратор запишет серийник и поднимет УТМ на этом токене (~1-2 мин).' }, function () {
+        showToast('Привязываю токен ' + serial + '…');
+        fetch('/api/utm/bind', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ service: service, serial: serial, fsrar: fsrar, reader: reader }),
+        })
+          .then(function (r) {
+            if (r.status === 409 || r.status === 404) { return r.json().then(function (d) { showToast(d.error || 'Не удалось привязать'); }); }
+            if (!r.ok) throw new Error();
+            showToast('Привязка запущена — УТМ поднимется на новом токене через ~1-2 мин');
+            pollStatus(true);
+          })
+          .catch(function () { showToast('Не удалось привязать токен'); });
       });
     },
 
