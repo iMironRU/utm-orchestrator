@@ -262,6 +262,11 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
             inn = org?.Inn,
             entity,                  // юрлицо/владелец (ООО или ФИО ИП) — показываем всегда
             folder = h.Instance.FolderPath,   // папка УТМ
+            // Папка УТМ под НАШИМ корнем (…\utms)? Если нет — можно предложить «Собрать в нашу папку».
+            inOurFolder = !string.IsNullOrEmpty(h.Instance.FolderPath)
+                && Path.GetFullPath(h.Instance.FolderPath).TrimEnd(Path.DirectorySeparatorChar)
+                    .StartsWith(Path.GetFullPath(UtmOrchestrator.Core.AppPaths.UtmRoot).TrimEnd(Path.DirectorySeparatorChar),
+                                StringComparison.OrdinalIgnoreCase),
             // Точная версия СБОРКИ (напр. 4.27.668) из SPA-бандла УТМ; запасной вариант
             // — версия формата из /api/info/list (4.2.0).
             version = UtmOrchestrator.Core.Diagnostics.UtmBuildVersion.Read(h.Instance.FolderPath) ?? h.Info?.Version,
@@ -999,6 +1004,83 @@ app.MapPost("/api/utm/bind", (BindTokenRequest req, SerialCache serials) =>
         finally { ReaderOp.Gate.Release(); }
     });
     return Results.Accepted(value: new { ok = true, service = inst.ServiceName, serial = req.Serial });
+});
+
+// --- Перенос папки УТМ в НАШ корень (…\utms\utm-N): собрать «не наши» в одно место ---
+// Стоп службы → delete.bat (снять procrun) → Move папки → install.bat из нового места
+// (пути относительные → служба та же, путь новый) → старт. PC/SC НЕ трогаем: ридер
+// остаётся introduce'нут, УТМ переподхватит свой токен на старте. state.json: FolderPath.
+static void RelocateInstanceFolder(string service, Action<string> log)
+{
+    var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var inst = st.Instances.FirstOrDefault(i => string.Equals(i.ServiceName, service, StringComparison.OrdinalIgnoreCase));
+    if (inst is null || string.IsNullOrWhiteSpace(inst.FolderPath) || !Directory.Exists(inst.FolderPath))
+    { log($"relocate {service}: папка не найдена — пропуск"); return; }
+
+    string oldFolder = Path.GetFullPath(inst.FolderPath).TrimEnd(Path.DirectorySeparatorChar);
+    string utmRoot = Path.GetFullPath(UtmOrchestrator.Core.AppPaths.UtmRoot).TrimEnd(Path.DirectorySeparatorChar);
+    if (oldFolder.StartsWith(utmRoot, StringComparison.OrdinalIgnoreCase)) { log($"relocate {service}: уже в нашей папке"); return; }
+    if (!string.Equals(Path.GetPathRoot(oldFolder), Path.GetPathRoot(utmRoot), StringComparison.OrdinalIgnoreCase))
+    { log($"relocate {service}: папка на другом диске — перенос не поддержан, пропуск"); return; }
+
+    string newFolder = UtmOrchestrator.Core.AppPaths.NextUtmFolder();
+    log($"=== relocate: {service}  {oldFolder} → {newFolder} ===");
+    UtmOrchestrator.Core.Services.ServiceControl.Stop(service, TimeSpan.FromSeconds(60));
+    System.Threading.Thread.Sleep(700);
+    UtmOrchestrator.Core.Install.ProcrunService.Unregister(service, oldFolder, log);
+    System.Threading.Thread.Sleep(500);
+    try { Directory.Move(oldFolder, newFolder); }
+    catch (Exception e)
+    {
+        // Перенос не удался (занят?) — регистрируем службу обратно на старом месте и стартуем.
+        log($"relocate {service}: Move не удался — {e.Message}; откатываю регистрацию на старую папку");
+        UtmOrchestrator.Core.Install.ProcrunService.Register(service, oldFolder, log);
+        UtmOrchestrator.Core.Services.ServiceControl.Start(service, TimeSpan.FromSeconds(90));
+        return;
+    }
+    bool reg = UtmOrchestrator.Core.Install.ProcrunService.Register(service, newFolder, log);
+    var st2 = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var i2 = st2.Instances.FirstOrDefault(i => string.Equals(i.ServiceName, service, StringComparison.OrdinalIgnoreCase));
+    if (i2 is not null) { i2.FolderPath = newFolder; st2.Save(OrchestratorState.DefaultPath); }
+    UtmOrchestrator.Core.Services.ServiceControl.Start(service, TimeSpan.FromSeconds(90));
+    log($"relocate {service}: {(reg ? "перенесён и запущен" : "перенесён, но регистрация под вопросом — проверьте службу")}");
+}
+
+app.MapPost("/api/utm/relocate", (RestartRequest req) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    if (string.IsNullOrWhiteSpace(req.Service)) return Results.BadRequest(new { error = "service обязателен" });
+    if (!ReaderOp.Gate.Wait(0)) return Results.Conflict(new { error = "уже идёт операция — попробуйте позже" });
+    _ = Task.Run(() =>
+    {
+        using var _ = BringUpStatus.Begin();
+        try { RelocateInstanceFolder(req.Service!, ReaderOp.FileLog); }
+        catch (Exception e) { ReaderOp.FileLog($"relocate {req.Service}: СБОЙ — {e}"); }
+        finally { ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true, service = req.Service });
+});
+
+app.MapPost("/api/utm/relocate-all", () =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    string utmRoot = Path.GetFullPath(UtmOrchestrator.Core.AppPaths.UtmRoot).TrimEnd(Path.DirectorySeparatorChar);
+    var outside = state.Instances
+        .Where(i => !string.IsNullOrWhiteSpace(i.FolderPath)
+            && !Path.GetFullPath(i.FolderPath).TrimEnd(Path.DirectorySeparatorChar)
+                .StartsWith(utmRoot, StringComparison.OrdinalIgnoreCase))
+        .Select(i => i.ServiceName).ToList();
+    if (outside.Count == 0) return Results.BadRequest(new { error = "все УТМ уже в нашей папке" });
+    if (!ReaderOp.Gate.Wait(0)) return Results.Conflict(new { error = "уже идёт операция — попробуйте позже" });
+    _ = Task.Run(() =>
+    {
+        using var _ = BringUpStatus.Begin();
+        try { foreach (var s in outside) RelocateInstanceFolder(s, ReaderOp.FileLog); }
+        catch (Exception e) { ReaderOp.FileLog($"relocate-all: СБОЙ — {e}"); }
+        finally { ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true, count = outside.Count });
 });
 
 // --- Полечить токены: рестарт SCardSvr (будит замёрзшие) + introduce-подъём всех ---

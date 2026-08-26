@@ -188,6 +188,7 @@
         reason: inst.reason || (st === 'warn' ? 'Требуется внимание' : ''),
         version: inst.version || '—',
         folder: inst.folder || '',
+        inOurFolder: inst.inOurFolder !== false,   // папка под нашим корнем (…\utms)? (undefined→считаем нашей)
         externalPort: inst.externalPort || inst.port,
         firewallOpen: inst.firewallOpen === true,
         exchange: inst.exchange || null,   // реальный обмен из лога УТМ
@@ -237,7 +238,7 @@
       fsrarDisplay: u.fsrar || '—',
       tokenDisplay: u.tokenSerial ? ('Rutoken · ' + u.tokenSerial) : 'нет токена',
       tokenSerial: u.tokenSerial,
-      folder: u.folder, version: u.version, internalPorts: u.internalPorts,
+      folder: u.folder, inOurFolder: u.inOurFolder !== false, version: u.version, internalPorts: u.internalPorts,
       externalPort: u.externalPort || u.port,
       firewallOpen: u.firewallOpen === true,
       statusLabel: meta.label, statusColor: meta.color, statusBg: meta.bg, status: u.status,
@@ -556,12 +557,17 @@
     // Групповой выбор (подготовка переноса): вкл/выкл + «выбрать все».
     var selMode = !!state.utmSelectMode;
     var selCount = views.filter(utmIsSelected).length;
+    // Сколько УТМ лежат ВНЕ нашей папки (…\utms) — для кнопки «Собрать в нашу папку».
+    var outsideCount = views.filter(function (v) { return v.inOurFolder === false; }).length;
     var selectToolbar = '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
       (selMode
         ? '<span style="font:12.5px system-ui,sans-serif;color:' + c.textTertiary + ';margin-right:auto;">Выбрано ' + selCount + ' из ' + views.length + '</span>' +
           '<button data-action="selectAllUtms" style="' + btnGhost(c) + '">' + (selCount === views.length && views.length ? 'Снять все' : 'Выбрать все') + '</button>' +
           '<button data-action="toggleSelectMode" style="' + btnGhost(c) + '">Готово</button>'
-        : '<button data-action="toggleSelectMode" style="' + btnGhost(c) + 'margin-left:auto;">Выбрать несколько</button>') +
+        : ((outsideCount > 0
+            ? '<button data-action="relocateAll" title="Перенести УТМ, лежащие вне нашей папки, в …\\utms" style="' + btnGhost(c) + 'margin-left:auto;">Собрать в нашу папку (' + outsideCount + ')</button>'
+            : '') +
+          '<button data-action="toggleSelectMode" style="' + btnGhost(c) + (outsideCount > 0 ? '' : 'margin-left:auto;') + '">Выбрать несколько</button>')) +
     '</div>';
 
     function cardGrid(listv) {
@@ -857,7 +863,10 @@
       '<button data-action="openLogsFor" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnGhost(c) + '">Логи УТМ</button>' +
       '<button data-action="queryUnprocessed" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnGhost(c) + '">Запросить накладные</button>' +
       (sel.status === 'stopped' ? '' :
-        '<button data-action="stopUtm" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="background:transparent;border:1px solid ' + c.error + ';color:' + c.error + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Остановить</button>');
+        '<button data-action="stopUtm" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="background:transparent;border:1px solid ' + c.error + ';color:' + c.error + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Остановить</button>') +
+      // Показываем ТОЛЬКО если папка УТМ не под нашим корнем (…\utms).
+      (sel.inOurFolder ? '' :
+        '<button data-action="relocateUtm" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" title="Перенести папку УТМ в нашу (…\\utms)" style="' + btnGhost(c) + '">Перенести в нашу папку</button>');
 
     // --- Порт и брандмауэр ---
     var fwOpen = sel.firewallOpen;
@@ -2305,6 +2314,32 @@
 
     /* Спойлер «показать привязанные» в блоке привязки токена. */
     toggleBindBound: function () { setState({ bindShowBound: !state.bindShowBound }); },
+
+    /* Перенести папку одного УТМ в нашу (…\utms). */
+    relocateUtm: function (el) {
+      var service = el.getAttribute('data-service');
+      var name = el.getAttribute('data-name') || service;
+      askConfirm({ title: 'Перенести в нашу папку', okLabel: 'Перенести',
+        message: 'Перенести папку УТМ «' + name + '» в нашу (…\\utms)?\nСлужба на ~10-30 сек остановится (обмен этого УТМ прервётся), затем поднимется. Токен и база сохраняются.' }, function () {
+        showToast('Переношу «' + name + '»…');
+        fetch('/api/utm/relocate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: service }) })
+          .then(function (r) { if (r.status === 409) { showToast('Уже идёт операция — подождите'); return; } if (!r.ok) throw new Error(); showToast('Перенос запущен — УТМ вернётся через ~1 мин'); pollStatus(true); })
+          .catch(function () { showToast('Не удалось перенести'); });
+      });
+    },
+
+    /* Собрать ВСЕ УТМ вне нашей папки в …\utms (по одному, по очереди). */
+    relocateAll: function () {
+      var n = utmSource().filter(function (u) { return u.inOurFolder === false; }).length;
+      if (!n) { showToast('Все УТМ уже в нашей папке'); return; }
+      askConfirm({ title: 'Собрать в нашу папку', okLabel: 'Собрать', danger: true,
+        message: 'Перенести ' + n + ' УТМ в нашу папку (…\\utms)?\nПойдёт по одному; каждый на ~10-30 сек прервёт обмен (по очереди). Токены и базы сохраняются.' }, function () {
+        showToast('Собираю ' + n + ' УТМ в нашу папку…');
+        fetch('/api/utm/relocate-all', { method: 'POST' })
+          .then(function (r) { if (r.status === 409) { showToast('Уже идёт операция — подождите'); return; } if (!r.ok) throw new Error(); showToast('Перенос запущен — УТМ вернутся по очереди'); pollStatus(true); })
+          .catch(function () { showToast('Не удалось запустить'); });
+      });
+    },
 
     /* Подхватить существующие УТМ под управление (первый запуск): строит state.json
        из обнаруженных служб + отсканированных токенов. */
