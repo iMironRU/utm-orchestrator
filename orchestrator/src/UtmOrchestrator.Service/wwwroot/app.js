@@ -1211,8 +1211,10 @@
         '<span style="font:600 12.5px system-ui,sans-serif;color:' + c.ok + ';">Доступно ' + esc(upd.latest) + '</span>' +
         '<button data-action="updateOrchestrator" style="background:' + c.ok + ';border:none;color:#fff;padding:8px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Обновить</button></div>';
     } else if (upd && upd.reachable === false) {
-      updRight = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
-        '<span style="font:600 12px system-ui,sans-serif;color:' + c.warn + ';">Не удалось проверить — нет связи с GitHub</span>' + retryBtn + '</div>';
+      updRight = '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">' +
+        '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+        '<span style="font:600 12px system-ui,sans-serif;color:' + c.warn + ';">Не удалось проверить — нет связи с GitHub</span>' + retryBtn + '</div>' +
+        (upd.reason ? '<span style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';max-width:420px;text-align:right;word-break:break-word;">' + esc(upd.reason) + '</span>' : '') + '</div>';
     } else if (upd && upd.latest) {
       updRight = '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
         '<span style="font:600 12px system-ui,sans-serif;color:' + c.textTertiary + ';">Актуальная версия</span>' + retryBtn + '</div>';

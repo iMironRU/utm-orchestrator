@@ -18,17 +18,33 @@ namespace UtmOrchestrator.Core.Update;
 public static class UpdateChecker
 {
     private const string LatestApi = "https://api.github.com/repos/iMironRU/utm-orchestrator/releases/latest";
+    // Веб-эндпоинт релиза (github.com, не api.*): 302 на .../releases/tag/vX. Фолбэк, если
+    // api.github.com режут, а github.com открыт (типично для корп-фильтрации). Даёт версию.
+    private const string LatestWeb = "https://github.com/iMironRU/utm-orchestrator/releases/latest";
 
-    // UseProxy=false: унаследованный HTTP_PROXY не должен мешать; UA обязателен для API GitHub.
+    // ВНЕШНИЙ хост (GitHub): УВАЖАЕМ системный прокси (как браузер) + доменные креды —
+    // иначе на машине за прокси проверка не достучится (браузер ходит, а мы — нет).
     // Таймаут короткий (8с): если GitHub недоступен — быстро вернуть «нет связи», а не висеть.
-    private static readonly HttpClient _http = new(new SocketsHttpHandler { UseProxy = false })
-    { Timeout = TimeSpan.FromSeconds(8) };
+    private static readonly HttpClient _http = CreateClient(true);
+    private static readonly HttpClient _httpNoRedirect = CreateClient(false);
 
-    static UpdateChecker() => _http.DefaultRequestHeaders.UserAgent.ParseAdd("UtmOrchestrator");
+    private static HttpClient CreateClient(bool followRedirects)
+    {
+        var h = new SocketsHttpHandler
+        {
+            UseProxy = true,
+            AllowAutoRedirect = followRedirects,
+            DefaultProxyCredentials = System.Net.CredentialCache.DefaultCredentials,
+        };
+        try { h.Proxy = System.Net.WebRequest.GetSystemWebProxy(); } catch { }
+        var c = new HttpClient(h) { Timeout = TimeSpan.FromSeconds(8) };
+        c.DefaultRequestHeaders.UserAgent.ParseAdd("UtmOrchestrator");
+        return c;
+    }
 
     public sealed record Info(
         string Current, string? Latest, bool UpdateAvailable,
-        string? AppUrl, string? RuntimeUrl, string? RuntimeKey, bool Reachable);
+        string? AppUrl, string? RuntimeUrl, string? RuntimeKey, bool Reachable, string? Error = null);
 
     // Ключ рантайма из имени ассета: UtmOrchestrator-runtime-<key>-win-x64.zip
     private static readonly Regex RuntimeName =
@@ -64,11 +80,38 @@ public static class UpdateChecker
             return new Info(current, string.IsNullOrEmpty(latest) ? null : latest,
                 newer && appUrl != null, appUrl, runtimeUrl, runtimeKey, Reachable: true);
         }
-        catch
+        catch (Exception apiEx)
         {
-            // GitHub недоступен (нет сети/таймаут/блокировка) — Reachable=false, чтобы UI
-            // показал «не удалось проверить» с кнопкой повтора, а не вечное «проверка…».
-            return new Info(current, null, false, null, null, null, Reachable: false);
+            // api.github.com не ответил (режут/прокси/таймаут). Пробуем github.com —
+            // веб-редирект на .../releases/tag/vX; часто открыт, когда api.* закрыт.
+            try
+            {
+                using var resp = await _httpNoRedirect.GetAsync(
+                    LatestWeb, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                var loc = resp.Headers.Location?.ToString() ?? "";
+                var m = Regex.Match(loc, @"/tag/v?([0-9][0-9.]*)");
+                if (m.Success)
+                {
+                    string latest = m.Groups[1].Value;
+                    bool newer = Version.TryParse(latest, out var lv)
+                              && Version.TryParse(current, out var cv) && lv > cv;
+                    // URL ассетов детерминированы (github.com, не api.*). runtime-ключ без API
+                    // неизвестен → авто-применение только app (рантайм меняется редко; apply
+                    // качает рантайм лишь при RuntimeUrl!=null, иначе оставляет установленный).
+                    string appUrl = "https://github.com/iMironRU/utm-orchestrator/releases/download/v"
+                                  + latest + "/UtmOrchestrator-app-" + latest + ".zip";
+                    return new Info(current, latest, newer && Version.TryParse(latest, out _), appUrl, null, null,
+                        Reachable: true, Error: "api.github.com недоступен, версия через github.com (" + apiEx.Message + ")");
+                }
+                return new Info(current, null, false, null, null, null, Reachable: false,
+                    Error: "api: " + apiEx.Message + " | github.com без редиректа на тег");
+            }
+            catch (Exception webEx)
+            {
+                // Ни api.github.com, ни github.com — реально нет связи. Причину отдаём в UI/лог.
+                return new Info(current, null, false, null, null, null, Reachable: false,
+                    Error: "api: " + apiEx.Message + " | web: " + webEx.Message);
+            }
         }
     }
 }

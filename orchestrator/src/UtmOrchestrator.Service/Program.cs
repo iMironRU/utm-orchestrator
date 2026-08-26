@@ -1417,7 +1417,7 @@ app.MapPost("/api/utm/add-all", (AddAllRequest req, SerialCache serials) =>
 app.MapGet("/api/update/status", async (CancellationToken ct) =>
 {
     var info = await UtmOrchestrator.Core.Update.UpdateChecker.CheckAsync(ct);
-    return Results.Json(new { current = info.Current, latest = info.Latest, updateAvailable = info.UpdateAvailable, reachable = info.Reachable });
+    return Results.Json(new { current = info.Current, latest = info.Latest, updateAvailable = info.UpdateAvailable, reachable = info.Reachable, reason = info.Error });
 });
 
 // --- Самообновление: применить (скачать payload → распаковать → detached update.ps1) ---
