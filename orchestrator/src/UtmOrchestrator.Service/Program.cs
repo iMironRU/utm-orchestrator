@@ -1023,6 +1023,18 @@ static void RelocateInstanceFolder(string service, Action<string> log)
     if (!string.Equals(Path.GetPathRoot(oldFolder), Path.GetPathRoot(utmRoot), StringComparison.OrdinalIgnoreCase))
     { log($"relocate {service}: папка на другом диске — перенос не поддержан, пропуск"); return; }
 
+    // Подъём переехавшего УТМ — через introduce-хореографию (RestartOne): forget всех +
+    // introduce ТОЛЬКО его ридера → его токен = слот 0 → сядет на СВОЙ токен. Обычный
+    // Start после переезда хватал чужой слот 0 → «ошибка ключа RSA». Другие УТМ держат
+    // свои токены — forget им не мешает. Если ReaderName нет — обычный старт.
+    var target = new BootBringUp.Target(service, inst.Port, inst.TokenSerial ?? "", inst.ExpectedFsrar, inst.ReaderName);
+    var allReaders = st.Instances.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
+    void BringUp()
+    {
+        if (!string.IsNullOrEmpty(inst.ReaderName)) BootBringUp.RestartOne(target, allReaders, log);
+        else UtmOrchestrator.Core.Services.ServiceControl.Start(service, TimeSpan.FromSeconds(90));
+    }
+
     string newFolder = UtmOrchestrator.Core.AppPaths.NextUtmFolder();
     log($"=== relocate: {service}  {oldFolder} → {newFolder} ===");
     UtmOrchestrator.Core.Services.ServiceControl.Stop(service, TimeSpan.FromSeconds(60));
@@ -1032,18 +1044,18 @@ static void RelocateInstanceFolder(string service, Action<string> log)
     try { Directory.Move(oldFolder, newFolder); }
     catch (Exception e)
     {
-        // Перенос не удался (занят?) — регистрируем службу обратно на старом месте и стартуем.
+        // Перенос не удался (занят?) — регистрируем службу обратно на старом месте и поднимаем.
         log($"relocate {service}: Move не удался — {e.Message}; откатываю регистрацию на старую папку");
         UtmOrchestrator.Core.Install.ProcrunService.Register(service, oldFolder, log);
-        UtmOrchestrator.Core.Services.ServiceControl.Start(service, TimeSpan.FromSeconds(90));
+        BringUp();
         return;
     }
     bool reg = UtmOrchestrator.Core.Install.ProcrunService.Register(service, newFolder, log);
     var st2 = OrchestratorState.Load(OrchestratorState.DefaultPath);
     var i2 = st2.Instances.FirstOrDefault(i => string.Equals(i.ServiceName, service, StringComparison.OrdinalIgnoreCase));
     if (i2 is not null) { i2.FolderPath = newFolder; st2.Save(OrchestratorState.DefaultPath); }
-    UtmOrchestrator.Core.Services.ServiceControl.Start(service, TimeSpan.FromSeconds(90));
-    log($"relocate {service}: {(reg ? "перенесён и запущен" : "перенесён, но регистрация под вопросом — проверьте службу")}");
+    BringUp();
+    log($"relocate {service}: {(reg ? "перенесён и поднят на своём токене" : "перенесён, но регистрация под вопросом — проверьте службу")}");
 }
 
 app.MapPost("/api/utm/relocate", (RestartRequest req) =>
