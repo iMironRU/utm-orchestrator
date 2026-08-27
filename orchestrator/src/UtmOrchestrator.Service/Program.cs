@@ -1509,12 +1509,27 @@ app.MapPost("/api/utm/add-all", (AddAllRequest req, SerialCache serials) =>
 app.MapGet("/api/update/status", async (CancellationToken ct) =>
 {
     var info = await UtmOrchestrator.Core.Update.UpdateChecker.CheckAsync(ct);
-    return Results.Json(new { current = info.Current, latest = info.Latest, updateAvailable = info.UpdateAvailable, reachable = info.Reachable, reason = info.Error });
+    // Остатки прошлой плоской раскладки в корне (если уже bin) — чтобы предложить чистку.
+    int flatLeftovers = OperatingSystem.IsWindows() ? UtmOrchestrator.Core.Install.FlatCleanup.Detect().Count : 0;
+    return Results.Json(new { current = info.Current, latest = info.Latest, updateAvailable = info.UpdateAvailable, reachable = info.Reachable, reason = info.Error, flatLeftovers });
 });
 
 // --- Самообновление: применить (скачать payload → распаковать → detached update.ps1) ---
 // update.ps1 остановит службу (наш родитель), заменит файлы и стартанёт заново; он —
 // отдельный процесс, поэтому переживёт остановку службы. Панель на ~минуту пропадёт.
+// --- Почистить остатки прошлой плоской раскладки (старые exe/dll/wwwroot/… в корне). ---
+// Безопасно: только когда уже bin-раскладка; удаляет лишь известный хлам, не трогая
+// bin/data/utms/cache/transfer. Занятые файлы пропускает.
+app.MapPost("/api/maintenance/cleanup-flat", () =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    if (!UtmOrchestrator.Core.Install.FlatCleanup.IsBinLayout())
+        return Results.BadRequest(new { error = "не bin-раскладка — чистить нечего" });
+    var (deleted, failed) = UtmOrchestrator.Core.Install.FlatCleanup.Clean(ReaderOp.FileLog);
+    ReaderOp.FileLog($"cleanup-flat: удалено {deleted}, ошибок {failed}");
+    return Results.Ok(new { ok = true, deleted, failed });
+});
+
 app.MapPost("/api/update/apply", async (CancellationToken ct) =>
 {
     if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });

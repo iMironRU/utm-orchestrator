@@ -1267,6 +1267,14 @@
       '<div style="font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;">Установленная версия ' + esc(orchVer) + '</div></div>' +
       updRight + '</div>';
 
+    // Карточка чистки — ТОЛЬКО если в корне есть остатки прошлой плоской раскладки.
+    var cleanupCard = (upd && upd.flatLeftovers > 0)
+      ? '<div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 18px;background:' + c.cardBg + ';border:1px solid ' + c.warn + ';border-radius:12px;flex-wrap:wrap;">' +
+        '<div style="min-width:0;"><div style="font:700 13.5px system-ui,sans-serif;color:' + c.textPrimary + ';">Остатки прошлой раскладки</div>' +
+        '<div style="font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;max-width:520px;">В корне лежат старые файлы плоской установки (' + upd.flatLeftovers + '). Их можно удалить — данные, УТМ и bin не тронутся.</div></div>' +
+        '<button data-action="cleanupFlat" style="background:' + c.brand + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;white-space:nowrap;">Почистить (' + upd.flatLeftovers + ')</button></div>'
+      : '';
+
     var src = utmSource();
     var rows = src.map(function (u) { return buildUtmView(u, c); }).map(function (v) {
       var right = v.status === 'ok'
@@ -1280,7 +1288,7 @@
     var note = '<div style="padding:12px 14px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">' +
       'Показаны установленные версии. Проверка и установка обновлений УТМ — следующий этап (скачивание с fsrar.gov.ru + замена файлов с сохранением базы и перепривязкой).</div>';
 
-    return '<div style="display:flex;flex-direction:column;gap:16px;">' + orchestrator +
+    return '<div style="display:flex;flex-direction:column;gap:16px;">' + orchestrator + cleanupCard +
       '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">УТМ</div>' + rows + note + '</div>';
   }
 
@@ -1809,6 +1817,22 @@
     goTokens: function () { setScreen('tokens'); },
     goUpdates: function () { setScreen('updates'); loadUpdateInfo(); },
     checkUpdatesAgain: function () { loadUpdateInfo(); },
+
+    /* Почистить остатки прошлой плоской раскладки (старые файлы в корне). */
+    cleanupFlat: function () {
+      askConfirm({ title: 'Почистить старые файлы', okLabel: 'Почистить',
+        message: 'Удалить остатки прошлой плоской раскладки в корне?\nДанные, УТМ, привязки и текущий bin НЕ тронутся — только старые exe/dll/папки от предыдущей установки.' }, function () {
+        showToast('Чищу старые файлы…');
+        fetch('/api/maintenance/cleanup-flat', { method: 'POST' })
+          .then(function (r) { return r.json().then(function (d) { return { s: r.status, d: d }; }); })
+          .then(function (x) {
+            if (x.s !== 200) { showToast((x.d && x.d.error) || 'Не удалось'); return; }
+            showToast('Удалено: ' + (x.d.deleted || 0) + (x.d.failed ? (', занято: ' + x.d.failed) : ''));
+            loadUpdateInfo();
+          })
+          .catch(function () { showToast('Не удалось почистить'); });
+      });
+    },
     goLogs: function () { setState({ screen: 'logs', utmLogService: null, logsSearch: '', mobileNavOpen: false, notifOpen: false }); loadLogs(); },
     refreshLogs: function () {
       if (state.utmLogService) { state.utmLog = null; render(); loadUtmLog(state.utmLogService); }
