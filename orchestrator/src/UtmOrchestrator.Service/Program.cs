@@ -1186,8 +1186,24 @@ app.MapGet("/api/utm/update/status", () =>
 {
     bool ready = Directory.Exists(Path.Combine(utmUpdApp, "transporter"));
     string? available = ready ? UtmOrchestrator.Core.Install.UtmUpdater.AvailableVersion(utmUpdApp) : null;
-    var utms = utmUpdChanges.Select(kv => new { service = kv.Key, changes = kv.Value }).ToList();
-    return Results.Json(new { ready, available, utms });
+    var availDate = ready ? UtmOrchestrator.Core.Install.UtmUpdater.BuildDate(utmUpdApp) : (DateTime?)null;
+    var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var utms = st.Instances.Where(i => !string.IsNullOrWhiteSpace(i.FolderPath))
+        .Select(i =>
+        {
+            var instDate = UtmOrchestrator.Core.Install.UtmUpdater.BuildDate(i.FolderPath);
+            // «Новее» строго по ДАТЕ сборки — не даунгрейдим (если установленный свежее — не предлагаем).
+            bool newer = availDate.HasValue && instDate.HasValue && availDate.Value.Date > instDate.Value.Date;
+            int changes = utmUpdChanges.TryGetValue(i.ServiceName, out var ch) ? ch : -1;
+            return (object)new
+            {
+                service = i.ServiceName,
+                installedDate = instDate?.ToString("yyyy-MM-dd"),
+                newer,
+                changes,
+            };
+        }).ToList();
+    return Results.Json(new { ready, available, availableDate = availDate?.ToString("yyyy-MM-dd"), utms });
 });
 
 app.MapPost("/api/utm/update", (RestartRequest req) =>

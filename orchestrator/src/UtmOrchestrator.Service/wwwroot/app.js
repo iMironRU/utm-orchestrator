@@ -1291,26 +1291,28 @@
       : '';
 
     var utmUpd = state.utmUpd || {};
-    var utmChg = {};   // service → сколько файлов изменится (из dry-run сверки)
-    (utmUpd.utms || []).forEach(function (x) { utmChg[x.service] = x.changes; });
+    var utmMap = {};   // service → {installedDate, newer, changes}
+    (utmUpd.utms || []).forEach(function (x) { utmMap[x.service] = x; });
     var src = utmSource();
     var rows = src.map(function (u) {
       var v = buildUtmView(u, c);
       var right = v.status === 'ok'
         ? '<span style="font:600 12px system-ui,sans-serif;color:' + c.ok + ';">' + esc(v.version) + '</span>'
         : '<span style="font:600 12px system-ui,sans-serif;color:' + c.textTertiary + ';">' + esc(v.version) + '</span>';
-      var chg = utmChg[v.service];
+      var ui = utmMap[v.service] || {};
       var updCtl = '';
       if (utmUpd.ready) {
-        if (chg === 0) updCtl = '<span style="font:600 12px system-ui,sans-serif;color:' + c.ok + ';white-space:nowrap;">актуально</span>';
-        else updCtl = '<button data-action="updateUtm" data-service="' + esc(v.service) + '" data-name="' + esc(v.name) + '" style="' + btnGhost(c) + '">Обновить' + (chg > 0 ? ' (' + chg + ')' : '') + '</button>';
+        updCtl = ui.newer
+          ? '<button data-action="updateUtm" data-service="' + esc(v.service) + '" data-name="' + esc(v.name) + '" style="background:' + c.ok + ';border:none;color:#fff;padding:8px 15px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Обновить' + (ui.changes > 0 ? ' (' + ui.changes + ')' : '') + '</button>'
+          : '<span style="font:600 12px system-ui,sans-serif;color:' + c.ok + ';white-space:nowrap;">актуально</span>';
       }
+      var built = ui.installedDate ? ' · сборка от ' + esc(ui.installedDate) : '';
       return '<div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:10px;flex-wrap:wrap;">' +
         '<div><div style="font:700 13.5px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(v.name) + ' <span style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">· порт ' + v.port + '</span></div>' +
-        '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;">Версия УТМ ' + esc(v.version) + '</div></div>' +
+        '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;">Версия УТМ ' + esc(v.version) + built + '</div></div>' +
         '<div style="display:flex;align-items:center;gap:10px;">' + right + updCtl + '</div></div>';
     }).join('');
-    var utmNeed = (utmUpd.utms || []).filter(function (x) { return x.changes > 0; }).length;
+    var utmNeed = (utmUpd.utms || []).filter(function (x) { return x.newer; }).length;
 
     // Заголовок «УТМ» + управление обновлением УТМ (из дистрибутива fsrar).
     var utmChkBtn = state.checkingUtmUpd
@@ -1318,7 +1320,7 @@
       : '<button data-action="checkUtmUpd" style="' + btnGhost(c) + '">Проверить обновления УТМ</button>';
     var utmUpdRight = utmUpd.ready
       ? '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
-        '<span style="font:600 12.5px system-ui,sans-serif;color:' + (utmNeed ? c.brand : c.ok) + ';">Дистрибутив ' + esc(utmUpd.available || '—') + (utmNeed ? ' · обновлений: ' + utmNeed : ' · все актуальны') + '</span>' +
+        '<span style="font:600 12.5px system-ui,sans-serif;color:' + (utmNeed ? c.brand : c.ok) + ';">Официальный дистрибутив от ' + esc(utmUpd.availableDate || '?') + (utmNeed ? ' · новее у ' + utmNeed : ' · все актуальны') + '</span>' +
         '<button data-action="checkUtmUpd" style="' + btnGhost(c) + '">Перекачать</button>' +
         (utmNeed ? '<button data-action="updateAllUtm" style="background:' + c.ok + ';border:none;color:#fff;padding:8px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Обновить все (' + utmNeed + ')</button>' : '') + '</div>'
       : utmChkBtn;
@@ -1326,7 +1328,7 @@
       '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">УТМ</div>' + utmUpdRight + '</div>';
 
     var note = '<div style="padding:12px 14px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">' +
-      'Номера версий разные и напрямую НЕ сравниваются: <b>4.27.668</b> — фронтенд УТМ (обновляется сам с ЕГАИС), <b>' + esc(utmUpd.available || 'b2698') + '</b> — билд официального установщика. Поэтому «нужно ли обновлять» определяем по <b>реальному отличию файлов</b>: <b>«Обновить (N)»</b> = отличается N файлов, <b>«актуально»</b> = совпадает с официальным дистрибутивом.<br>' +
+      'Сравниваем по <b>дате сборки кода</b> (номера версий 4.27.668 и ' + esc(utmUpd.available || 'b2698') + ' — из разных шкал, несравнимы). <b>«Обновить»</b> показываем только если официальный дистрибутив <b>новее</b> установленного — <b>даунгрейд не предлагаем</b>. <b>«актуально»</b> = у вас та же или более свежая сборка.<br>' +
       '«Обновить» заменит код УТМ из fsrar.gov.ru, <b>сохранив базу и привязку токена</b> (бэкап + авто-откат при сбое). Каждый УТМ на ~1-2 мин прервёт обмен. <b>Начните с одного.</b></div>';
 
     return '<div style="display:flex;flex-direction:column;gap:16px;">' + orchestrator + cleanupCard +

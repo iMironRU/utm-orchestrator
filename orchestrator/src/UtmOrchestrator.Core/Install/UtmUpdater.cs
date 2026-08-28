@@ -161,6 +161,28 @@ public static class UtmUpdater
     /// <summary>Версия сборки УТМ в папке (из SPA-бандла), напр. «4.27.668».</summary>
     public static string? Version(string folder) => UtmOrchestrator.Core.Diagnostics.UtmBuildVersion.Read(folder);
 
+    /// <summary>
+    /// Дата сборки кода УТМ = максимальный mtime jar-файлов в transporter\lib. Сравнимо
+    /// между установщиком и установленным (в отличие от несравнимых номеров версий) —
+    /// на этом строим «не даунгрейдить»: обновляем, только если официальный НОВЕЕ.
+    /// </summary>
+    public static DateTime? BuildDate(string folder)
+    {
+        try
+        {
+            string lib = Path.Combine(folder, "transporter", "lib");
+            if (!Directory.Exists(lib)) return null;
+            DateTime? max = null;
+            foreach (var f in Directory.EnumerateFiles(lib, "*.jar"))
+            {
+                var t = File.GetLastWriteTime(f);
+                if (max is null || t > max.Value) max = t;
+            }
+            return max;
+        }
+        catch { return null; }
+    }
+
     /// <summary>Версия скачанного установщика (из имени: 4.2.0-b2698). null если не качали.</summary>
     public static string? AvailableVersion(string templateApp)
     {
