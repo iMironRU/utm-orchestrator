@@ -59,6 +59,8 @@
     twoUtm: null,                  // статус 2UTM (null = не грузили; {present:false} = нет)
     updateInfo: null,              // {current, latest, updateAvailable, reachable} самообновления
     checkingUpdate: false,         // идёт запрос проверки версии (спиннер + защита от вечного «проверка…»)
+    utmUpd: null,                  // {ready, available} обновления УТМ из fsrar (скачан ли дистрибутив)
+    checkingUtmUpd: false,         // идёт скачивание дистрибутива УТМ
     netStatus: null,               // {manageable, externalIp, lanIp, cgnat} — управляемость роутера
     updating: null,                // {from, target, phase, msg} — оверлей прогресса обновления
     overviewFilter: null,          // null | 'problem'
@@ -1275,21 +1277,40 @@
         '<button data-action="cleanupFlat" style="background:' + c.brand + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;white-space:nowrap;">Почистить (' + upd.flatLeftovers + ')</button></div>'
       : '';
 
+    var utmUpd = state.utmUpd || {};
     var src = utmSource();
-    var rows = src.map(function (u) { return buildUtmView(u, c); }).map(function (v) {
+    var rows = src.map(function (u) {
+      var v = buildUtmView(u, c);
       var right = v.status === 'ok'
         ? '<span style="font:600 12px system-ui,sans-serif;color:' + c.ok + ';">' + esc(v.version) + '</span>'
         : '<span style="font:600 12px system-ui,sans-serif;color:' + c.textTertiary + ';">' + esc(v.version) + '</span>';
+      var updBtn = utmUpd.ready
+        ? '<button data-action="updateUtm" data-service="' + esc(v.service) + '" data-name="' + esc(v.name) + '" style="' + btnGhost(c) + '">Обновить</button>'
+        : '';
       return '<div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:10px;flex-wrap:wrap;">' +
         '<div><div style="font:700 13.5px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(v.name) + ' <span style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">· порт ' + v.port + '</span></div>' +
-        '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;">Версия УТМ</div></div>' + right + '</div>';
+        '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;">Версия УТМ ' + esc(v.version) + '</div></div>' +
+        '<div style="display:flex;align-items:center;gap:10px;">' + right + updBtn + '</div></div>';
     }).join('');
 
+    // Заголовок «УТМ» + управление обновлением УТМ (из дистрибутива fsrar).
+    var utmChkBtn = state.checkingUtmUpd
+      ? '<button disabled style="opacity:.6;' + btnGhost(c) + '">Проверяю…</button>'
+      : '<button data-action="checkUtmUpd" style="' + btnGhost(c) + '">Проверить обновления УТМ</button>';
+    var utmUpdRight = utmUpd.ready
+      ? '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+        '<span style="font:600 12.5px system-ui,sans-serif;color:' + c.ok + ';">Дистрибутив ' + esc(utmUpd.available || '—') + ' готов</span>' +
+        '<button data-action="checkUtmUpd" style="' + btnGhost(c) + '">Перекачать</button>' +
+        '<button data-action="updateAllUtm" style="background:' + c.ok + ';border:none;color:#fff;padding:8px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Обновить все</button></div>'
+      : utmChkBtn;
+    var utmHead = '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">' +
+      '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">УТМ</div>' + utmUpdRight + '</div>';
+
     var note = '<div style="padding:12px 14px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">' +
-      'Показаны установленные версии. Проверка и установка обновлений УТМ — следующий этап (скачивание с fsrar.gov.ru + замена файлов с сохранением базы и перепривязкой).</div>';
+      'Обновление УТМ из официального дистрибутива <b>fsrar.gov.ru</b>: «Проверить» скачает свежий (~150 МБ, напрямую), затем «Обновить» заменит код УТМ, <b>сохранив базу и привязку токена</b> (бэкап + авто-откат при сбое). Каждый УТМ на ~1-2 мин прервёт обмен. <b>Начните с одного.</b></div>';
 
     return '<div style="display:flex;flex-direction:column;gap:16px;">' + orchestrator + cleanupCard +
-      '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">УТМ</div>' + rows + note + '</div>';
+      utmHead + rows + note + '</div>';
   }
 
   /* ====================== ЭКРАН: ЛОГИ ======================
@@ -1381,6 +1402,14 @@
         // сеть/таймаут/abort — считаем GitHub недоступным
         setState({ updateInfo: { updateAvailable: false, reachable: false }, checkingUpdate: false });
       });
+  }
+
+  // Статус обновления УТМ (скачан ли дистрибутив fsrar + его версия). Локально, без сети наружу.
+  function loadUtmUpd() {
+    fetch('/api/utm/update/status', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { setState({ utmUpd: d }); })
+      .catch(function () { setState({ utmUpd: { ready: false } }); });
   }
 
   // Отслеживание обновления по фазам: скачивание (сервер отвечает старой версией) →
@@ -1815,8 +1844,64 @@
     goOverview: function () { setScreen('overview'); },
     goUtm: function () { setScreen('overview'); }, // «УТМ» и «Обзор» объединены
     goTokens: function () { setScreen('tokens'); },
-    goUpdates: function () { setScreen('updates'); loadUpdateInfo(); },
+    goUpdates: function () { setScreen('updates'); loadUpdateInfo(); loadUtmUpd(); },
     checkUpdatesAgain: function () { loadUpdateInfo(); },
+
+    /* Проверить обновления УТМ: скачать/распаковать дистрибутив с fsrar (фон, прогресс в панели). */
+    checkUtmUpd: function () {
+      if (state.checkingUtmUpd) return;
+      askConfirm({ title: 'Проверить обновления УТМ', okLabel: 'Скачать',
+        message: 'Скачать свежий дистрибутив УТМ с fsrar.gov.ru (~150 МБ)?\nУТМ не трогаем — только скачиваем и распаковываем. Займёт пару минут.' }, function () {
+        setState({ checkingUtmUpd: true });
+        showToast('Скачиваю дистрибутив УТМ с fsrar…');
+        fetch('/api/utm/update/check', { method: 'POST' })
+          .then(function (r) {
+            if (r.status === 409) { setState({ checkingUtmUpd: false }); showToast('Уже идёт операция — подождите'); return; }
+            if (!r.ok) throw new Error();
+            // прогресс скачивания покажет activeProgress; статус подтянем опросом
+            var iv = setInterval(function () {
+              fetch('/api/utm/update/status', { cache: 'no-store' }).then(function (r2) { return r2.json(); }).then(function (d) {
+                if (d.ready) { clearInterval(iv); setState({ utmUpd: d, checkingUtmUpd: false }); showToast('Дистрибутив ' + (d.available || '') + ' готов'); }
+              }).catch(function () {});
+            }, 5000);
+            setTimeout(function () { clearInterval(iv); setState({ checkingUtmUpd: false }); loadUtmUpd(); }, 300000);
+          })
+          .catch(function () { setState({ checkingUtmUpd: false }); showToast('Не удалось запустить'); });
+      });
+    },
+
+    /* Обновить один УТМ из скачанного дистрибутива (бэкап + авто-откат). */
+    updateUtm: function (el) {
+      var service = el.getAttribute('data-service');
+      var name = el.getAttribute('data-name') || service;
+      askConfirm({ title: 'Обновить УТМ', okLabel: 'Обновить',
+        message: 'Обновить УТМ «' + name + '» из скачанного дистрибутива?\nСлужба остановится на ~1-2 мин (обмен прервётся), код заменится, база и токен сохранятся. Есть бэкап и авто-откат при сбое.' }, function () {
+        showToast('Обновляю «' + name + '»…');
+        fetch('/api/utm/update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: service }) })
+          .then(function (r) {
+            if (r.status === 409 || r.status === 400) { return r.json().then(function (d) { showToast(d.error || 'Не удалось'); }); }
+            if (!r.ok) throw new Error();
+            showToast('Обновление запущено — УТМ вернётся через ~1-2 мин'); pollStatus(true);
+          })
+          .catch(function () { showToast('Не удалось обновить'); });
+      });
+    },
+
+    /* Обновить ВСЕ УТМ из скачанного дистрибутива (по очереди). */
+    updateAllUtm: function () {
+      var n = utmSource().length;
+      askConfirm({ title: 'Обновить все УТМ', okLabel: 'Обновить все', danger: true,
+        message: 'Обновить все ' + n + ' УТМ из дистрибутива?\nПойдёт по одному; каждый на ~1-2 мин прервёт обмен. База и токены сохраняются, бэкап + авто-откат. Лучше сначала обнови один и убедись.' }, function () {
+        showToast('Обновляю все УТМ…');
+        fetch('/api/utm/update-all', { method: 'POST' })
+          .then(function (r) {
+            if (r.status === 409 || r.status === 400) { return r.json().then(function (d) { showToast(d.error || 'Не удалось'); }); }
+            if (!r.ok) throw new Error();
+            showToast('Обновление всех запущено — УТМ вернутся по очереди'); pollStatus(true);
+          })
+          .catch(function () { showToast('Не удалось запустить'); });
+      });
+    },
 
     /* Почистить остатки прошлой плоской раскладки (старые файлы в корне). */
     cleanupFlat: function () {
