@@ -1095,6 +1095,117 @@ app.MapPost("/api/utm/relocate-all", () =>
     return Results.Accepted(value: new { ok = true, count = outside.Count });
 });
 
+// ===== Обновление самих УТМ (transporter+agent) из дистрибутива fsrar.gov.ru =====
+string utmUpdWork = Path.Combine(UtmOrchestrator.Core.AppPaths.CacheDir, "utm-update");
+string utmUpdApp  = Path.Combine(utmUpdWork, "out", "app");
+
+// Обновить ОДИН УТМ: стоп → бэкап → apply(шаблон) → introduce-подъём → проверка RSA → откат при сбое.
+static bool UpdateOneUtm(string service, string templateApp, Action<string> log)
+{
+    var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var inst = st.Instances.FirstOrDefault(i => string.Equals(i.ServiceName, service, StringComparison.OrdinalIgnoreCase));
+    if (inst is null || string.IsNullOrWhiteSpace(inst.FolderPath) || !Directory.Exists(inst.FolderPath))
+    { log($"update {service}: папка УТМ не найдена — пропуск"); return false; }
+
+    string folder = inst.FolderPath;
+    string backupDir = Path.Combine(UtmOrchestrator.Core.AppPaths.CacheDir, "utm-update-backups",
+        service + "_" + System.DateTime.Now.ToString("yyyyMMdd_HHmmss"));
+
+    log($"=== update УТМ {service}: {folder} (бэкап: {backupDir}) ===");
+    UtmOrchestrator.Core.Services.ServiceControl.Stop(service, TimeSpan.FromSeconds(60));
+    System.Threading.Thread.Sleep(800);
+
+    var res = UtmOrchestrator.Core.Install.UtmUpdater.Apply(folder, templateApp, backupDir, dryRun: false, log);
+    if (res.Total == 0) log($"update {service}: изменений нет (уже актуально) — просто поднимаю");
+
+    var target = new BootBringUp.Target(service, inst.Port, inst.TokenSerial ?? "", inst.ExpectedFsrar, inst.ReaderName);
+    var allReaders = st.Instances.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
+    bool up = !string.IsNullOrEmpty(inst.ReaderName)
+        ? BootBringUp.RestartOne(target, allReaders, log)
+        : UtmOrchestrator.Core.Services.ServiceControl.Start(service, TimeSpan.FromSeconds(90));
+
+    if (!up && res.Total > 0)
+    {
+        log($"update {service}: НЕ поднялся после апдейта — ОТКАТ из бэкапа");
+        UtmOrchestrator.Core.Services.ServiceControl.Stop(service, TimeSpan.FromSeconds(60));
+        System.Threading.Thread.Sleep(500);
+        UtmOrchestrator.Core.Install.UtmUpdater.Restore(folder, backupDir, res.Added, log);
+        up = !string.IsNullOrEmpty(inst.ReaderName)
+            ? BootBringUp.RestartOne(target, allReaders, log)
+            : UtmOrchestrator.Core.Services.ServiceControl.Start(service, TimeSpan.FromSeconds(90));
+        log($"update {service}: после отката {(up ? "поднялся" : "НЕ поднялся — ручной разбор")}");
+        return false;
+    }
+    log($"update {service}: {(up ? "обновлён и поднят" : "поднят, но проверьте")}");
+    return up;
+}
+
+// Скачать/распаковать дистрибутив УТМ (fsrar, НАПРЯМУЮ). Фон, прогресс в OpProgress. УТМ не трогает.
+app.MapPost("/api/utm/update/check", () =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    if (!ReaderOp.Gate.Wait(0)) return Results.Conflict(new { error = "уже идёт операция — попробуйте позже" });
+    _ = Task.Run(() =>
+    {
+        using var _ = BringUpStatus.Begin();
+        OpProgress.Start("Проверка обновлений УТМ", 1);
+        try
+        {
+            OpProgress.Update(0, "скачиваю дистрибутив с fsrar.gov.ru (~150 МБ) и распаковываю…", "");
+            var app2 = UtmOrchestrator.Core.Install.UtmUpdater.DownloadAndExtract(utmUpdWork, ReaderOp.FileLog);
+            ReaderOp.FileLog(app2 is null ? "update/check: не удалось скачать/распаковать" : $"update/check: шаблон готов ({app2})");
+        }
+        catch (Exception e) { ReaderOp.FileLog($"update/check: СБОЙ — {e}"); }
+        finally { OpProgress.Finish(); ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true });
+});
+
+app.MapGet("/api/utm/update/status", () =>
+{
+    bool ready = Directory.Exists(Path.Combine(utmUpdApp, "transporter"));
+    string? available = ready ? UtmOrchestrator.Core.Install.UtmUpdater.AvailableVersion(utmUpdApp) : null;
+    return Results.Json(new { ready, available });
+});
+
+app.MapPost("/api/utm/update", (RestartRequest req) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    if (string.IsNullOrWhiteSpace(req.Service)) return Results.BadRequest(new { error = "service обязателен" });
+    if (!Directory.Exists(Path.Combine(utmUpdApp, "transporter")))
+        return Results.BadRequest(new { error = "сначала «Проверить обновления УТМ» (скачать дистрибутив)" });
+    if (!ReaderOp.Gate.Wait(0)) return Results.Conflict(new { error = "уже идёт операция — попробуйте позже" });
+    _ = Task.Run(() =>
+    {
+        using var _ = BringUpStatus.Begin();
+        try { UpdateOneUtm(req.Service!, utmUpdApp, ReaderOp.FileLog); }
+        catch (Exception e) { ReaderOp.FileLog($"update {req.Service}: СБОЙ — {e}"); }
+        finally { ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true, service = req.Service });
+});
+
+app.MapPost("/api/utm/update-all", () =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    if (!Directory.Exists(Path.Combine(utmUpdApp, "transporter")))
+        return Results.BadRequest(new { error = "сначала «Проверить обновления УТМ»" });
+    var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var services = state.Instances.Where(i => !string.IsNullOrWhiteSpace(i.FolderPath)).Select(i => i.ServiceName).ToList();
+    if (services.Count == 0) return Results.BadRequest(new { error = "нет УТМ" });
+    if (!ReaderOp.Gate.Wait(0)) return Results.Conflict(new { error = "уже идёт операция — попробуйте позже" });
+    _ = Task.Run(() =>
+    {
+        using var _ = BringUpStatus.Begin();
+        OpProgress.Start("Обновление УТМ", services.Count);
+        int done = 0;
+        try { foreach (var s in services) { OpProgress.Update(done, "обновляю…", s); UpdateOneUtm(s, utmUpdApp, ReaderOp.FileLog); done++; } }
+        catch (Exception e) { ReaderOp.FileLog($"update-all: СБОЙ — {e}"); }
+        finally { OpProgress.Finish(); ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true, count = services.Count });
+});
+
 // --- Полечить токены: рестарт SCardSvr (будит замёрзшие) + introduce-подъём всех ---
 // Служба (LocalSystem) делает это сама — UAC/трей не нужны. Это НЕ PKCS11-скан, а
 // рестарт службы + introduce (session-0-safe, как boot-подъём). Фон, под общим замком.
