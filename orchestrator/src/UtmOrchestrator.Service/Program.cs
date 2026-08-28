@@ -142,6 +142,7 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
                 ok = up,
                 title = names.Get(i.TokenSerial) ?? i.ServiceName,
                 reason = up ? null : now ? "Запускается…" : "В очереди",
+                version = UtmOrchestrator.Core.Diagnostics.UtmBuildVersion.Read(i.FolderPath), // чтобы версия не пропадала при операции
             };
         }).ToList();
         return Results.Json(new
@@ -176,6 +177,7 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
         {
             service = i.ServiceName, port = i.Port, verdict = "Starting", ok = false,
             title = names.Get(i.TokenSerial) ?? i.ServiceName, reason = "Идёт установка…",
+            version = UtmOrchestrator.Core.Diagnostics.UtmBuildVersion.Read(i.FolderPath), // версия не пропадает при операции
         }).ToList();
         return Results.Json(new
         {
@@ -1098,6 +1100,8 @@ app.MapPost("/api/utm/relocate-all", () =>
 // ===== Обновление самих УТМ (transporter+agent) из дистрибутива fsrar.gov.ru =====
 string utmUpdWork = Path.Combine(UtmOrchestrator.Core.AppPaths.CacheDir, "utm-update");
 string utmUpdApp  = Path.Combine(utmUpdWork, "out", "app");
+// service → сколько файлов изменится (dry-run). >0 = обновление доступно. Считаем в /check.
+var utmUpdChanges = new System.Collections.Concurrent.ConcurrentDictionary<string, int>();
 
 // Обновить ОДИН УТМ: стоп → бэкап → apply(шаблон) → introduce-подъём → проверка RSA → откат при сбое.
 static bool UpdateOneUtm(string service, string templateApp, Action<string> log)
@@ -1154,6 +1158,23 @@ app.MapPost("/api/utm/update/check", () =>
             OpProgress.Update(0, "скачиваю дистрибутив с fsrar.gov.ru (~150 МБ) и распаковываю…", "");
             var app2 = UtmOrchestrator.Core.Install.UtmUpdater.DownloadAndExtract(utmUpdWork, ReaderOp.FileLog);
             ReaderOp.FileLog(app2 is null ? "update/check: не удалось скачать/распаковать" : $"update/check: шаблон готов ({app2})");
+            if (app2 is not null)
+            {
+                // Сравниваем шаблон с каждым установленным УТМ (dry-run) — сколько изменится = есть ли обновление.
+                OpProgress.Update(0, "сверяю с установленными УТМ…", "");
+                utmUpdChanges.Clear();
+                foreach (var i in OrchestratorState.Load(OrchestratorState.DefaultPath).Instances
+                             .Where(x => !string.IsNullOrWhiteSpace(x.FolderPath) && Directory.Exists(x.FolderPath)))
+                {
+                    try
+                    {
+                        var plan = UtmOrchestrator.Core.Install.UtmUpdater.Apply(
+                            i.FolderPath, app2, Path.Combine(Path.GetTempPath(), "utmupd-dry"), dryRun: true, _ => { });
+                        utmUpdChanges[i.ServiceName] = plan.Total;
+                    }
+                    catch (Exception e) { ReaderOp.FileLog($"update/check dry {i.ServiceName}: {e.Message}"); }
+                }
+            }
         }
         catch (Exception e) { ReaderOp.FileLog($"update/check: СБОЙ — {e}"); }
         finally { OpProgress.Finish(); ReaderOp.Gate.Release(); }
@@ -1165,7 +1186,8 @@ app.MapGet("/api/utm/update/status", () =>
 {
     bool ready = Directory.Exists(Path.Combine(utmUpdApp, "transporter"));
     string? available = ready ? UtmOrchestrator.Core.Install.UtmUpdater.AvailableVersion(utmUpdApp) : null;
-    return Results.Json(new { ready, available });
+    var utms = utmUpdChanges.Select(kv => new { service = kv.Key, changes = kv.Value }).ToList();
+    return Results.Json(new { ready, available, utms });
 });
 
 app.MapPost("/api/utm/update", (RestartRequest req) =>

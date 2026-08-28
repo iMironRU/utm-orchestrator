@@ -62,6 +62,23 @@ public static class UtmUpdater
     /// <summary>Путь к innoextract.exe рядом с нашим кодом (bin\app\tools\innoextract.exe).</summary>
     public static string InnoextractPath => Path.Combine(AppContext.BaseDirectory, "tools", "innoextract.exe");
 
+    // Метка версии на сервере fsrar (Last-Modified + размер) — для сверки с кэшем. null если недоступно.
+    private static string? HeadTag(Action<string> log)
+    {
+        try
+        {
+            using var h = new HttpClient(new SocketsHttpHandler { UseProxy = false }) { Timeout = TimeSpan.FromSeconds(30) };
+            h.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+            using var req = new HttpRequestMessage(HttpMethod.Head, UtmUrl);
+            using var resp = h.Send(req);
+            if (!resp.IsSuccessStatusCode) return null;
+            string lm = resp.Content.Headers.LastModified?.ToString("O") ?? "";
+            long len = resp.Content.Headers.ContentLength ?? 0;
+            return lm + "|" + len;
+        }
+        catch (Exception e) { log($"HEAD fsrar: {e.Message}"); return null; }
+    }
+
     /// <summary>
     /// Скачать дистрибутив с fsrar (НАПРЯМУЮ) + распаковать zip + innoextract → путь к шаблону (…\app).
     /// null при ошибке.
@@ -73,6 +90,20 @@ public static class UtmUpdater
             Directory.CreateDirectory(workDir);
             string inno = InnoextractPath;
             if (!File.Exists(inno)) { log($"innoextract не найден: {inno}"); return null; }
+
+            string outDir = Path.Combine(workDir, "out");
+            string appCached = Path.Combine(outDir, "app");
+            string marker = Path.Combine(outDir, "source.txt");
+
+            // Сверка кэша: HEAD → Last-Modified+размер. Совпало с сохранённым и шаблон на месте —
+            // не качаем 150 МБ и не распаковываем заново.
+            string? remoteTag = HeadTag(log);
+            if (remoteTag is not null && Directory.Exists(Path.Combine(appCached, "transporter"))
+                && File.Exists(marker) && File.ReadAllText(marker).Trim() == remoteTag)
+            {
+                log("кэш дистрибутива актуален — скачивание не требуется");
+                return appCached;
+            }
 
             string zip = Path.Combine(workDir, "installer.zip");
             log("качаю дистрибутив УТМ с fsrar.gov.ru (напрямую, без прокси)…");
@@ -96,7 +127,6 @@ public static class UtmUpdater
             if (exe is null) { log("установщик .exe внутри zip не найден"); return null; }
 
             log("извлекаю innoextract…");
-            string outDir = Path.Combine(workDir, "out");
             if (Directory.Exists(outDir)) Directory.Delete(outDir, true);
             Directory.CreateDirectory(outDir);
             var psi = new ProcessStartInfo(inno, $"--output-dir \"{outDir}\" \"{exe}\"")
@@ -120,6 +150,7 @@ public static class UtmUpdater
             }
             catch { }
 
+            try { if (remoteTag is not null) File.WriteAllText(marker, remoteTag); } catch { }
             try { File.Delete(zip); Directory.Delete(zdir, true); } catch { }
             log($"шаблон готов: {app}");
             return app;

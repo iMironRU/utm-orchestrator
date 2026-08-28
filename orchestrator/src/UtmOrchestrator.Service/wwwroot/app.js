@@ -263,12 +263,29 @@
   function activeProgress() {
     var co = state.clientOp;
     if (co && co.active) return co;
-    var so = state.liveStatus && state.liveStatus.op;
-    if (so && so.active) return so;
+    var st = state.liveStatus || {};
+    if (st.op && st.op.active) return st.op;
+    // Подъём УТМ (boot) — с прогрессом ready/total.
+    if (st.boot && st.boot.active)
+      return { active: true, title: 'Подъём УТМ', done: st.boot.ready || 0, total: st.boot.total || 0,
+               phase: st.boot.phase || 'ввожу токены на своих слотах…' };
+    // Любая другая длинная операция с ридерами/УТМ (перенос/привязка/обновление/лечение/перезапуск)
+    // держит bringUp — показываем индетерминантный спиннер, чтобы было видно «идёт, ждите».
+    if (st.bringUp)
+      return { active: true, indeterminate: true, title: 'Идёт операция с УТМ',
+               phase: 'подождите — панель обновится, когда закончится' };
     return null;
   }
   /* Панель прогресса длинной операции: заголовок, N/M, бар, текущий элемент + фаза. */
   function progressPanel(c, p) {
+    // Индетерминантный режим (нет счётчика) — крутящийся спиннер + заголовок + фаза.
+    if (p.indeterminate) {
+      return '<div style="display:flex;align-items:center;gap:12px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.brand + ';border-radius:12px;">' +
+        '<div style="width:20px;height:20px;border-radius:50%;border:2.5px solid ' + c.border + ';border-top-color:' + c.brand + ';animation:spin .8s linear infinite;flex-shrink:0;"></div>' +
+        '<div style="min-width:0;"><div style="font:700 13.5px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(p.title || 'Идёт операция') + '</div>' +
+        (p.phase ? '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:2px;">' + esc(p.phase) + '</div>' : '') +
+        '</div></div>';
+    }
     var total = p.total || 0, done = p.done || 0;
     var pct = total > 0 ? Math.min(100, Math.round(100 * done / total)) : 0;
     return '<div style="display:flex;flex-direction:column;gap:10px;padding:16px;background:' + c.cardBg + ';border:1px solid ' + c.brand + ';border-radius:12px;">' +
@@ -610,9 +627,7 @@
         '</div>'
       : '';
 
-    var prog = activeProgress();
-    var progHtml = prog ? progressPanel(c, prog) : '';
-    return progHtml + hero + filterChip + selectToolbar + grid + actionBar;
+    return hero + filterChip + selectToolbar + grid + actionBar;   // прогресс теперь глобально (в appBody)
   }
 
   function overviewCard(u, c, selMode, checked) {
@@ -1110,9 +1125,7 @@
       (freeUtm === 0 ? ' — достигнут лимит' : '') +
     '</div>';
 
-    var iprog = activeProgress();
     return '<div style="display:flex;flex-direction:column;gap:16px;">' +
-      (iprog ? progressPanel(c, iprog) : '') +
       twoUtmCard(c) +
       '<div style="display:flex;flex-direction:column;gap:14px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
         '<div style="font:700 15px system-ui,sans-serif;color:' + c.textPrimary + ';">Установка нового УТМ</div>' +
@@ -1278,20 +1291,26 @@
       : '';
 
     var utmUpd = state.utmUpd || {};
+    var utmChg = {};   // service → сколько файлов изменится (из dry-run сверки)
+    (utmUpd.utms || []).forEach(function (x) { utmChg[x.service] = x.changes; });
     var src = utmSource();
     var rows = src.map(function (u) {
       var v = buildUtmView(u, c);
       var right = v.status === 'ok'
         ? '<span style="font:600 12px system-ui,sans-serif;color:' + c.ok + ';">' + esc(v.version) + '</span>'
         : '<span style="font:600 12px system-ui,sans-serif;color:' + c.textTertiary + ';">' + esc(v.version) + '</span>';
-      var updBtn = utmUpd.ready
-        ? '<button data-action="updateUtm" data-service="' + esc(v.service) + '" data-name="' + esc(v.name) + '" style="' + btnGhost(c) + '">Обновить</button>'
-        : '';
+      var chg = utmChg[v.service];
+      var updCtl = '';
+      if (utmUpd.ready) {
+        if (chg === 0) updCtl = '<span style="font:600 12px system-ui,sans-serif;color:' + c.ok + ';white-space:nowrap;">актуально</span>';
+        else updCtl = '<button data-action="updateUtm" data-service="' + esc(v.service) + '" data-name="' + esc(v.name) + '" style="' + btnGhost(c) + '">Обновить' + (chg > 0 ? ' (' + chg + ')' : '') + '</button>';
+      }
       return '<div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:10px;flex-wrap:wrap;">' +
         '<div><div style="font:700 13.5px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(v.name) + ' <span style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">· порт ' + v.port + '</span></div>' +
-        '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;">Версия УТМ ' + esc(v.version) + '</div></div>' +
-        '<div style="display:flex;align-items:center;gap:10px;">' + right + updBtn + '</div></div>';
+        '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;">Версия УТМ ' + esc(v.version) + (utmUpd.available ? ' · доступно ' + esc(utmUpd.available) : '') + '</div></div>' +
+        '<div style="display:flex;align-items:center;gap:10px;">' + right + updCtl + '</div></div>';
     }).join('');
+    var utmNeed = (utmUpd.utms || []).filter(function (x) { return x.changes > 0; }).length;
 
     // Заголовок «УТМ» + управление обновлением УТМ (из дистрибутива fsrar).
     var utmChkBtn = state.checkingUtmUpd
@@ -1299,9 +1318,9 @@
       : '<button data-action="checkUtmUpd" style="' + btnGhost(c) + '">Проверить обновления УТМ</button>';
     var utmUpdRight = utmUpd.ready
       ? '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
-        '<span style="font:600 12.5px system-ui,sans-serif;color:' + c.ok + ';">Дистрибутив ' + esc(utmUpd.available || '—') + ' готов</span>' +
+        '<span style="font:600 12.5px system-ui,sans-serif;color:' + (utmNeed ? c.brand : c.ok) + ';">Дистрибутив ' + esc(utmUpd.available || '—') + (utmNeed ? ' · обновлений: ' + utmNeed : ' · все актуальны') + '</span>' +
         '<button data-action="checkUtmUpd" style="' + btnGhost(c) + '">Перекачать</button>' +
-        '<button data-action="updateAllUtm" style="background:' + c.ok + ';border:none;color:#fff;padding:8px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Обновить все</button></div>'
+        (utmNeed ? '<button data-action="updateAllUtm" style="background:' + c.ok + ';border:none;color:#fff;padding:8px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Обновить все (' + utmNeed + ')</button>' : '') + '</div>'
       : utmChkBtn;
     var utmHead = '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">' +
       '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">УТМ</div>' + utmUpdRight + '</div>';
@@ -1640,7 +1659,7 @@
       (isMobile ? mobileTopBar(c) : sidebar(c)) +
       (isMobile && state.mobileNavOpen ? drawer(c) : '') +
       '<div style="flex:1;padding:' + pad + ';display:flex;flex-direction:column;gap:22px;min-width:0;">' +
-        header(c) + screenContent(c) +
+        header(c) + (function () { var gp = activeProgress(); return gp ? progressPanel(c, gp) : ''; })() + screenContent(c) +
       '</div>' +
     '</div>';
     return shell;
@@ -1858,13 +1877,17 @@
           .then(function (r) {
             if (r.status === 409) { setState({ checkingUtmUpd: false }); showToast('Уже идёт операция — подождите'); return; }
             if (!r.ok) throw new Error();
-            // прогресс скачивания покажет activeProgress; статус подтянем опросом
+            // Прогресс скачивания/сверки показывает глобальный спиннер (activeProgress по op).
+            // Опрашиваем статус: обновляем utmUpd каждый раз, завершаем когда шаблон готов И
+            // серверная операция (скачка+распаковка+сверка) закончилась.
             var iv = setInterval(function () {
               fetch('/api/utm/update/status', { cache: 'no-store' }).then(function (r2) { return r2.json(); }).then(function (d) {
-                if (d.ready) { clearInterval(iv); setState({ utmUpd: d, checkingUtmUpd: false }); showToast('Дистрибутив ' + (d.available || '') + ' готов'); }
+                setState({ utmUpd: d });
+                var opActive = state.liveStatus && state.liveStatus.op && state.liveStatus.op.active;
+                if (d.ready && !opActive) { clearInterval(iv); setState({ checkingUtmUpd: false }); showToast('Готово: дистрибутив ' + (d.available || '')); }
               }).catch(function () {});
-            }, 5000);
-            setTimeout(function () { clearInterval(iv); setState({ checkingUtmUpd: false }); loadUtmUpd(); }, 300000);
+            }, 4000);
+            setTimeout(function () { clearInterval(iv); setState({ checkingUtmUpd: false }); loadUtmUpd(); }, 600000);
           })
           .catch(function () { setState({ checkingUtmUpd: false }); showToast('Не удалось запустить'); });
       });
