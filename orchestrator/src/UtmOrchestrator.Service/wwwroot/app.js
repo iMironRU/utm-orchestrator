@@ -2554,8 +2554,6 @@
       });
     },
     reloadPage: function () { window.location.reload(); },
-    /* обновление УТМ — в беклоге (Update-UTM), пока честно */
-    updateUtm: function () { notReady('Обновление УТМ'); },
 
     /* логи */
     onLogsPort: function (el) { setState({ logsFilterPort: el.value }); },

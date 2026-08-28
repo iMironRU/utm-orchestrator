@@ -1102,6 +1102,8 @@ string utmUpdWork = Path.Combine(UtmOrchestrator.Core.AppPaths.CacheDir, "utm-up
 string utmUpdApp  = Path.Combine(utmUpdWork, "out", "app");
 // service → сколько файлов изменится (dry-run). >0 = обновление доступно. Считаем в /check.
 var utmUpdChanges = new System.Collections.Concurrent.ConcurrentDictionary<string, int>();
+var ruCulture = new System.Globalization.CultureInfo("ru-RU");
+string? RuDate(DateTime? d) => d?.ToString("d MMMM yyyy", ruCulture);
 
 // Обновить ОДИН УТМ: стоп → бэкап → apply(шаблон) → introduce-подъём → проверка RSA → откат при сбое.
 static bool UpdateOneUtm(string service, string templateApp, Action<string> log)
@@ -1198,12 +1200,12 @@ app.MapGet("/api/utm/update/status", () =>
             return (object)new
             {
                 service = i.ServiceName,
-                installedDate = instDate?.ToString("yyyy-MM-dd"),
+                installedDate = RuDate(instDate),
                 newer,
                 changes,
             };
         }).ToList();
-    return Results.Json(new { ready, available, availableDate = availDate?.ToString("yyyy-MM-dd"), utms });
+    return Results.Json(new { ready, available, availableDate = RuDate(availDate), utms });
 });
 
 app.MapPost("/api/utm/update", (RestartRequest req) =>
