@@ -1307,7 +1307,7 @@
       }
       return '<div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 16px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:10px;flex-wrap:wrap;">' +
         '<div><div style="font:700 13.5px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(v.name) + ' <span style="font:12px ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';">· порт ' + v.port + '</span></div>' +
-        '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;">Версия УТМ ' + esc(v.version) + (utmUpd.available ? ' · доступно ' + esc(utmUpd.available) : '') + '</div></div>' +
+        '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';margin-top:3px;">Версия УТМ ' + esc(v.version) + '</div></div>' +
         '<div style="display:flex;align-items:center;gap:10px;">' + right + updCtl + '</div></div>';
     }).join('');
     var utmNeed = (utmUpd.utms || []).filter(function (x) { return x.changes > 0; }).length;
@@ -1326,7 +1326,8 @@
       '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">УТМ</div>' + utmUpdRight + '</div>';
 
     var note = '<div style="padding:12px 14px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">' +
-      'Обновление УТМ из официального дистрибутива <b>fsrar.gov.ru</b>: «Проверить» скачает свежий (~150 МБ, напрямую), затем «Обновить» заменит код УТМ, <b>сохранив базу и привязку токена</b> (бэкап + авто-откат при сбое). Каждый УТМ на ~1-2 мин прервёт обмен. <b>Начните с одного.</b></div>';
+      'Номера версий разные и напрямую НЕ сравниваются: <b>4.27.668</b> — фронтенд УТМ (обновляется сам с ЕГАИС), <b>' + esc(utmUpd.available || 'b2698') + '</b> — билд официального установщика. Поэтому «нужно ли обновлять» определяем по <b>реальному отличию файлов</b>: <b>«Обновить (N)»</b> = отличается N файлов, <b>«актуально»</b> = совпадает с официальным дистрибутивом.<br>' +
+      '«Обновить» заменит код УТМ из fsrar.gov.ru, <b>сохранив базу и привязку токена</b> (бэкап + авто-откат при сбое). Каждый УТМ на ~1-2 мин прервёт обмен. <b>Начните с одного.</b></div>';
 
     return '<div style="display:flex;flex-direction:column;gap:16px;">' + orchestrator + cleanupCard +
       utmHead + rows + note + '</div>';
