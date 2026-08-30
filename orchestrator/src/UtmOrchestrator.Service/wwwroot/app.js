@@ -273,7 +273,7 @@
     // держит bringUp — показываем индетерминантный спиннер, чтобы было видно «идёт, ждите».
     if (st.bringUp)
       return { active: true, indeterminate: true, title: 'Идёт операция с УТМ',
-               phase: 'подождите — панель обновится, когда закончится' };
+               phase: 'остальные операции заблокированы — дождитесь завершения' };
     return null;
   }
   /* Панель прогресса длинной операции: заголовок, N/M, бар, текущий элемент + фаза. */
@@ -2608,9 +2608,24 @@
   };
 
   /* ====================== ДЕЛЕГИРОВАНИЕ СОБЫТИЙ ====================== */
+  // Действия-ОПЕРАЦИИ (запускают бэкенд-мутации/долгие задачи). Пока идёт любая операция
+  // (activeProgress активен) — блокируем их, чтобы нельзя было запустить вторую. Навигация,
+  // фильтры, переключатели, чтение логов, открытие УТМ — остаются доступны.
+  var BUSY_BLOCKED = {
+    addAllUtm: 1, addUtm: 1, adopt2Utm: 1, adoptExisting: 1, bindToken: 1,
+    bulkExport: 1, bulkStop: 1, bulkCheckDocs: 1, changePort: 1, checkUtmUpd: 1,
+    cleanupFlat: 1, commitImport: 1, confirmDelete: 1, exportUtm: 1, healTokens: 1,
+    importPicked: 1, queryUnprocessed: 1, queryUnprocessedAll: 1, raiseAll: 1,
+    rebindAll: 1, relocateAll: 1, relocateUtm: 1, resetReaders: 1, restore2Utm: 1,
+    saveExternalPort: 1, scanTokens: 1, setFirewallNo: 1, setFirewallYes: 1,
+    stopUtm: 1, toggleFirewall: 1, uninstallOrchestrator: 1, updateAllUtm: 1,
+    updateUtm: 1, updateOrchestrator: 1, utmPrimary: 1,
+  };
   function runAction(name, el, e) {
     var fn = actions[name];
-    if (fn) fn(el, e);
+    if (!fn) return;
+    if (BUSY_BLOCKED[name] && activeProgress()) { showToast('Идёт операция — дождитесь завершения'); return; }
+    fn(el, e);
   }
 
   function bindEvents() {
