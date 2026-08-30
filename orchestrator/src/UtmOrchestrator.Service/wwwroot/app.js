@@ -1769,6 +1769,22 @@
   var appEl;
   function render() {
     appEl.innerHTML = view();
+    applyBusyDisable();
+  }
+  // Пока идёт операция — визуально гасим кнопки-операции (серые + некликабельные).
+  // innerHTML пересобирается каждый render, поэтому по завершении стили сбрасываются сами.
+  function applyBusyDisable() {
+    if (!activeProgress()) return;
+    var els = appEl.querySelectorAll('[data-action]');
+    for (var i = 0; i < els.length; i++) {
+      var a = els[i].getAttribute('data-action');
+      if (a && BUSY_BLOCKED[a]) {
+        els[i].style.opacity = '0.45';
+        els[i].style.pointerEvents = 'none';
+        els[i].style.cursor = 'not-allowed';
+        els[i].setAttribute('title', 'Идёт операция — дождитесь завершения');
+      }
+    }
   }
   function setState(patch) {
     Object.assign(state, patch);
