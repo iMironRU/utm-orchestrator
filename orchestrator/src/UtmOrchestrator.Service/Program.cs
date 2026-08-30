@@ -1233,20 +1233,32 @@ app.MapGet("/api/utm/update/status", () =>
     return Results.Json(new { ready, available, availableDate = RuDate(availDate), utms });
 });
 
-app.MapPost("/api/utm/update", (RestartRequest req) =>
+app.MapPost("/api/utm/update", (RestartRequest req, NameStore names, OrgInfoCache orgCache) =>
 {
     if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
     if (string.IsNullOrWhiteSpace(req.Service)) return Results.BadRequest(new { error = "service обязателен" });
     if (!Directory.Exists(Path.Combine(utmUpdApp, "transporter")))
         return Results.BadRequest(new { error = "сначала «Проверить обновления УТМ» (скачать дистрибутив)" });
     if (!ReaderOp.Gate.Wait(0)) return Results.Conflict(new { error = "уже идёт операция — попробуйте позже" });
+
+    // Название УТМ для прогресса: кастомное имя → юрлицо из кэша → имя службы (не «TransportN»).
+    var stName = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var inst0 = stName.Instances.FirstOrDefault(i => string.Equals(i.ServiceName, req.Service, StringComparison.OrdinalIgnoreCase));
+    string disp = req.Service!;
+    if (inst0 is not null)
+    {
+        disp = names.Get(inst0.TokenSerial)
+            ?? (!string.IsNullOrEmpty(inst0.ExpectedFsrar) && orgCache.TryGet(inst0.ExpectedFsrar!, out var oi) ? oi.Display : null)
+            ?? req.Service!;
+    }
+
     _ = Task.Run(() =>
     {
         using var _ = BringUpStatus.Begin();
-        OpProgress.Start("Обновление УТМ", 1);
+        OpProgress.Start($"Обновление УТМ · {disp}", 1);
         try
         {
-            Action<string> plog = m => { ReaderOp.FileLog(m); OpProgress.Update(0, m.Length > 55 ? m.Substring(0, 55) + "…" : m, req.Service!); };
+            Action<string> plog = m => { ReaderOp.FileLog(m); OpProgress.Update(0, m.Length > 55 ? m.Substring(0, 55) + "…" : m, disp); };
             UpdateOneUtm(req.Service!, utmUpdApp, plog);
         }
         catch (Exception e) { ReaderOp.FileLog($"update {req.Service}: СБОЙ — {e}"); }

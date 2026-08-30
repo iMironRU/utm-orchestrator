@@ -264,7 +264,15 @@
     var co = state.clientOp;
     if (co && co.active) return co;
     var st = state.liveStatus || {};
-    if (st.op && st.op.active) return st.op;
+    if (st.op && st.op.active) {
+      var op = st.op;
+      // Операция на 1 элемент (обновить один УТМ и т.п.) — бар «0/1» выглядит замершим,
+      // показываем крутящийся спиннер + фазу.
+      if ((op.total || 0) <= 1)
+        return { active: true, indeterminate: true, title: op.title || 'Операция',
+                 phase: (op.current ? op.current + ' — ' : '') + (op.phase || '') };
+      return op;
+    }
     // Подъём УТМ (boot) — с прогрессом ready/total.
     if (st.boot && st.boot.active)
       return { active: true, title: 'Подъём УТМ', done: st.boot.ready || 0, total: st.boot.total || 0,
