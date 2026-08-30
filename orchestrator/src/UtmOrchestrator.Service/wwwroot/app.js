@@ -1774,6 +1774,10 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { setState({ toast: null }); }, 2600);
   }
+  // Спиннер на время СИНХРОННОЙ длинной операции (запрос накладных, подхват и т.п.) —
+  // activeProgress покажет как клиентский прогресс (индетерминантный). Ставим до fetch, снимаем в then/catch.
+  function busyStart(title) { setState({ clientOp: { active: true, indeterminate: true, title: title, phase: 'выполняется, подождите…' } }); }
+  function busyStop() { if (state.clientOp && state.clientOp.active) setState({ clientOp: { active: false } }); }
   // Честная заглушка: функция ещё не реализована — не притворяемся успехом.
   function notReady(what) { showToast((what || 'Функция') + ' — в разработке'); }
 
@@ -2265,11 +2269,11 @@
     queryUnprocessedAll: function () {
       askConfirm({ title: 'Необработанные накладные — все УТМ', okLabel: 'Запросить для всех',
         message: 'Запросить у ЕГАИС необработанные накладные (ТТН без акта) для ВСЕХ УТМ?\nПо каждому уйдёт запрос; накладные придут в очереди УТМ. Обычно делают после переноса или сбоя.' }, function () {
-        showToast('Запрашиваю необработанные накладные по всем УТМ…');
+        busyStart('Запрос накладных по всем УТМ');
         fetch('/api/utm/query-unprocessed-all', { method: 'POST' })
           .then(function (r) { return r.json(); })
-          .then(function (d) { showToast('Запрос отправлен: принято ' + (d.accepted || 0) + ' из ' + (d.total || 0) + ' УТМ'); })
-          .catch(function () { showToast('Не удалось отправить запросы'); });
+          .then(function (d) { busyStop(); showToast('Запрос отправлен: принято ' + (d.accepted || 0) + ' из ' + (d.total || 0) + ' УТМ'); })
+          .catch(function () { busyStop(); showToast('Не удалось отправить запросы'); });
       });
     },
     /* Файрвол: открыть/закрыть порт УТМ (правит наше правило через службу).
@@ -2480,13 +2484,13 @@
        из обнаруженных служб + отсканированных токенов. */
     adoptExisting: function () {
       var toks = state.scannedTokens || [];
-      showToast('Подхватываю существующие УТМ…');
+      busyStart('Подхват существующих УТМ');
       fetch('/api/setup/adopt', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tokens: toks }),
       })
         .then(function (r) { return r.json(); })
-        .then(function (d) { showToast('Подхвачено УТМ: ' + (d.matched || 0) + ' из ' + (d.total || 0)); pollStatus(true); })
-        .catch(function () { showToast('Не удалось подхватить'); });
+        .then(function (d) { busyStop(); showToast('Подхвачено УТМ: ' + (d.matched || 0) + ' из ' + (d.total || 0)); pollStatus(true); })
+        .catch(function () { busyStop(); showToast('Не удалось подхватить'); });
     },
 
     /* Полечить токены — через службу (рестарт SCardSvr + introduce-подъём всех).
