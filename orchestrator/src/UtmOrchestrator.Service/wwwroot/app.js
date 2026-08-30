@@ -1328,7 +1328,7 @@
       : '<button data-action="checkUtmUpd" style="' + btnGhost(c) + '">Проверить обновления УТМ</button>';
     var utmUpdRight = utmUpd.ready
       ? '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
-        '<span style="font:600 12.5px system-ui,sans-serif;color:' + (utmNeed ? c.brand : c.ok) + ';">Официальный дистрибутив от ' + esc(utmUpd.availableDate || '?') + (utmNeed ? ' · новее у ' + utmNeed : ' · все актуальны') + '</span>' +
+        '<span style="font:600 12.5px system-ui,sans-serif;color:' + (utmNeed ? c.brand : c.ok) + ';">Официальный дистрибутив от ' + esc(utmUpd.availableDate || '?') + (utmNeed ? ' · устарело: ' + utmNeed : ' · все актуальны') + '</span>' +
         '<button data-action="checkUtmUpd" style="' + btnGhost(c) + '">Перекачать</button>' +
         (utmNeed ? '<button data-action="updateAllUtm" style="background:' + c.ok + ';border:none;color:#fff;padding:8px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Обновить все (' + utmNeed + ')</button>' : '') + '</div>'
       : utmChkBtn;
@@ -2718,7 +2718,8 @@
 
   /* Экраны, опирающиеся на живые данные /api/status. */
   function liveBackedScreen() {
-    return state.screen === 'overview' || state.screen === 'utm' || state.screen === 'utm-detail';
+    return state.screen === 'overview' || state.screen === 'utm' || state.screen === 'utm-detail'
+      || state.screen === 'updates' || state.screen === 'install' || state.screen === 'tokens';
   }
   /* Поле ввода краткого имени в фокусе — не перерисовывать по таймеру, иначе
      затрём набираемый текст. */
@@ -2731,6 +2732,7 @@
      медленном ответе браузер каждые 8с добавляет запрос, они накладываются и вводят
      службу в голодание пула потоков (синхронные вызовы ServiceController). */
   var pollInFlight = false;
+  var lastBusy = false; // была ли операция активна в прошлом опросе (чтобы снять спиннер по завершении)
   function pollStatus(force) {
     if (pollInFlight && !force) return;
     pollInFlight = true;
@@ -2751,8 +2753,12 @@
         state.liveStatus = d;
         state.liveError = false;
         state.lastCheck = new Date().toLocaleTimeString('ru-RU');
-        if (!state.needLogin && liveBackedScreen() && (force || !nameInputFocused())) render();
+        // Перерисовать, если экран «живой» ЛИБО идёт операция (спиннер должен обновляться на
+        // любом экране), ЛИБО операция только что завершилась (lastBusy) — чтобы спиннер снялся.
+        var busyNow = !!activeProgress();
+        if (!state.needLogin && (liveBackedScreen() || busyNow || lastBusy) && (force || !nameInputFocused())) render();
         else patchServiceIndicator();
+        lastBusy = busyNow;
       })
       .catch(function (e) {
         if (e && e.handled) return;       // 401 уже обработан
