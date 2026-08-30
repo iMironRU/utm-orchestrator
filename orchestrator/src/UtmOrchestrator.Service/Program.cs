@@ -192,6 +192,31 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
         });
     }
 
+    // Идёт операция с ридерами/УТМ (перенос/привязка/обновление/перезапуск/лечение), но НЕ boot и
+    // НЕ install-op: НЕ делаем медленный discovery+health (УТМ может быть остановлен, health висел бы,
+    // а список «пропадал» бы). Отдаём быстрый статус из state.json (+version), bringUp=true → панель
+    // МГНОВЕННО показывает спиннер «идёт операция», и список УТМ на месте.
+    if (BringUpStatus.Active)
+    {
+        var stb = UtmOrchestrator.Core.State.OrchestratorState.Load(UtmOrchestrator.Core.State.OrchestratorState.DefaultPath);
+        string utmRootB = Path.GetFullPath(UtmOrchestrator.Core.AppPaths.UtmRoot).TrimEnd(Path.DirectorySeparatorChar);
+        var busyList = stb.Instances.Select(i => (object)new
+        {
+            service = i.ServiceName, port = i.Port, verdict = "Starting", ok = false,
+            title = names.Get(i.TokenSerial) ?? i.ServiceName, reason = "идёт операция…",
+            version = UtmOrchestrator.Core.Diagnostics.UtmBuildVersion.Read(i.FolderPath),
+            inOurFolder = !string.IsNullOrEmpty(i.FolderPath)
+                && Path.GetFullPath(i.FolderPath).TrimEnd(Path.DirectorySeparatorChar)
+                    .StartsWith(utmRootB, StringComparison.OrdinalIgnoreCase),
+        }).ToList();
+        return Results.Json(new
+        {
+            total = stb.Instances.Count, ok = 0, faulty = 0, bringUp = true,
+            orchestratorVersion = UtmOrchestrator.Core.AppInfo.Version,
+            machine = Environment.MachineName, maxUtms, instances = busyList,
+        });
+    }
+
     // scanTokens: false — НЕ трогаем PKCS11 на живых токенах (иначе драйвер роняет
     // процесс). Серийники берём из кэша SerialCache.
     var instances = await UtmDiscovery.DiscoverAsync(ct, scanTokens: false, serials);
@@ -1218,9 +1243,14 @@ app.MapPost("/api/utm/update", (RestartRequest req) =>
     _ = Task.Run(() =>
     {
         using var _ = BringUpStatus.Begin();
-        try { UpdateOneUtm(req.Service!, utmUpdApp, ReaderOp.FileLog); }
+        OpProgress.Start("Обновление УТМ", 1);
+        try
+        {
+            Action<string> plog = m => { ReaderOp.FileLog(m); OpProgress.Update(0, m.Length > 55 ? m.Substring(0, 55) + "…" : m, req.Service!); };
+            UpdateOneUtm(req.Service!, utmUpdApp, plog);
+        }
         catch (Exception e) { ReaderOp.FileLog($"update {req.Service}: СБОЙ — {e}"); }
-        finally { ReaderOp.Gate.Release(); }
+        finally { OpProgress.Finish(); ReaderOp.Gate.Release(); }
     });
     return Results.Accepted(value: new { ok = true, service = req.Service });
 });
