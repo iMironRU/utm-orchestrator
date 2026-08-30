@@ -2710,7 +2710,11 @@
   function pollStatus(force) {
     if (pollInFlight && !force) return;
     pollInFlight = true;
-    fetch('/api/status', { cache: 'no-store' })
+    // ЖЁСТКИЙ таймаут: если статус завис (напр. health по перезапускающемуся УТМ), не даём
+    // pollInFlight застрять навсегда — иначе опрос встаёт и панель «замерзает» до перезагрузки.
+    var pollCtrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var pollTo = setTimeout(function () { if (pollCtrl) pollCtrl.abort(); }, 12000);
+    fetch('/api/status', { cache: 'no-store', signal: pollCtrl ? pollCtrl.signal : undefined })
       .then(function (r) {
         if (r.status === 401) {           // сервер требует вход
           if (!state.needLogin) setState({ needLogin: true });
@@ -2732,7 +2736,7 @@
         if (!state.needLogin && liveBackedScreen()) render();
         else patchServiceIndicator();
       })
-      .then(function () { pollInFlight = false; }, function () { pollInFlight = false; });
+      .then(function () { clearTimeout(pollTo); pollInFlight = false; }, function () { clearTimeout(pollTo); pollInFlight = false; });
   }
 
   /* ====================== ИНИЦИАЛИЗАЦИЯ ====================== */
