@@ -1138,6 +1138,15 @@ static bool UpdateOneUtm(string service, string templateApp, Action<string> log)
     if (inst is null || string.IsNullOrWhiteSpace(inst.FolderPath) || !Directory.Exists(inst.FolderPath))
     { log($"update {service}: папка УТМ не найдена — пропуск"); return false; }
 
+    // СТРАХОВКА (before): кто из СОСЕДЕЙ сейчас реально поднят (RSA ok + свой ФСРАР).
+    // Их трогать нельзя. Если апдейт (forget-all в RestartOne) кого-то из них уронит —
+    // в конце автоматически лечим полным peel-down, но ТОЛЬКО реально задетых.
+    var neighbors = st.Instances
+        .Where(i => !string.Equals(i.ServiceName, service, StringComparison.OrdinalIgnoreCase))
+        .ToList();
+    var healthyBefore = ProbeHealthy(neighbors, log);
+    if (healthyBefore.Count > 0) log($"update {service}: до апдейта подняты соседи [{string.Join(", ", healthyBefore)}]");
+
     string folder = inst.FolderPath;
     string backupDir = Path.Combine(UtmOrchestrator.Core.AppPaths.CacheDir, "utm-update-backups",
         service + "_" + System.DateTime.Now.ToString("yyyyMMdd_HHmmss"));
@@ -1165,10 +1174,62 @@ static bool UpdateOneUtm(string service, string templateApp, Action<string> log)
             ? BootBringUp.RestartOne(target, allReaders, log)
             : UtmOrchestrator.Core.Services.ServiceControl.Start(service, TimeSpan.FromSeconds(90));
         log($"update {service}: после отката {(up ? "поднялся" : "НЕ поднялся — ручной разбор")}");
-        return false;
     }
-    log($"update {service}: {(up ? "обновлён и поднят" : "поднят, но проверьте")}");
+    else
+        log($"update {service}: {(up ? "обновлён и поднят" : "поднят, но проверьте")}");
+
+    // СТРАХОВКА (after): если апдейт задел ранее живых соседей — автоматически лечим
+    // (то же, что кнопка «Поднять все»). Запускается лишь при реальном ущербе — здоровый
+    // сценарий не трогаем.
+    RecoverFallenNeighbors(st, healthyBefore, log);
     return up;
+}
+
+// Кто из переданных экземпляров сейчас реально поднят: порт отвечает, RSA ok и (если знаем)
+// ownerId = ожидаемый ФСРАР. Недоступен/чужой ФСРАР = не считаем поднятым.
+static List<string> ProbeHealthy(IEnumerable<UtmInstance> insts, Action<string> log)
+{
+    var up = new List<string>();
+    if (!OperatingSystem.IsWindows()) return up;
+    using var http = new UtmHttpClient(TimeSpan.FromSeconds(3));
+    foreach (var i in insts)
+    {
+        if (i.Port <= 0) continue;
+        try
+        {
+            var info = http.GetInfoAsync(i.Port).GetAwaiter().GetResult();
+            bool ok = info is not null && info.RsaOk
+                && (string.IsNullOrEmpty(i.ExpectedFsrar)
+                    || string.Equals(info.OwnerId, i.ExpectedFsrar, StringComparison.OrdinalIgnoreCase));
+            if (ok) up.Add(i.ServiceName);
+        }
+        catch { /* недоступен = не поднят */ }
+    }
+    return up;
+}
+
+// Если кто-то из ранее живых соседей упал после апдейта — полный peel-down (ResetToNative +
+// ApplyIntroduce), как «Поднять все». Ничего не делает, если все соседи целы.
+static void RecoverFallenNeighbors(OrchestratorState st, IReadOnlyList<string> healthyBefore, Action<string> log)
+{
+    if (!OperatingSystem.IsWindows() || healthyBefore.Count == 0) return;
+    var check = st.Instances.Where(i => healthyBefore.Contains(i.ServiceName, StringComparer.OrdinalIgnoreCase)).ToList();
+    var stillUp = ProbeHealthy(check, log);
+    var fell = healthyBefore.Where(s => !stillUp.Contains(s, StringComparer.OrdinalIgnoreCase)).ToList();
+    if (fell.Count == 0) { log("страховка: соседи целы — восстановление не требуется"); return; }
+
+    log($"страховка: апдейт задел ранее живых соседей [{string.Join(", ", fell)}] — запускаю полный подъём (peel-down)");
+    var targets = st.Instances
+        .Where(i => !string.IsNullOrEmpty(i.TokenSerial))
+        .Select(i => new BootBringUp.Target(i.ServiceName, i.Port, i.TokenSerial!, i.ExpectedFsrar, i.ReaderName))
+        .ToList();
+    try
+    {
+        UtmOrchestrator.Core.Readers.ReaderReset.ResetToNative(targets.Select(t => t.Service), log);
+        var r = BootBringUp.ApplyIntroduce(targets, log);
+        log($"страховка: восстановление завершено — поднято {r.Started.Count}, ошибок {r.Failed.Count}, успех={r.Success}");
+    }
+    catch (Exception e) { log($"страховка: СБОЙ восстановления — {e.Message}"); }
 }
 
 // Скачать/распаковать дистрибутив УТМ (fsrar, НАПРЯМУЮ). Фон, прогресс в OpProgress. УТМ не трогает.
