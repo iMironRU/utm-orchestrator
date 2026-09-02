@@ -36,13 +36,21 @@ public static class BootBringUp
         bool Success,
         IReadOnlyList<string> Started,
         IReadOnlyList<string> Failed,
-        IReadOnlyDictionary<string, string> ReaderBySerial);
+        IReadOnlyDictionary<string, string> ReaderBySerial)
+    {
+        /// <summary>Служба → серийник токена, ПОДХВАЧЕННЫЙ по ФСРАР во время Apply
+        /// (для УТМ, у которых серийника в state не было). Вызывающий записывает в state.json.
+        /// Пусто, если самоподхват не включён или подхватывать было нечего.</summary>
+        public IReadOnlyDictionary<string, string> AdoptedSerialByService { get; init; }
+            = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// Выполнить подъём. <paramref name="dryRun"/> = только печать плана, без действий.
     /// Требует прав администратора (start/stop служб, рестарт SCardSvr).
     /// </summary>
-    public static Result Apply(IReadOnlyList<Target> targets, Action<string> log, bool dryRun = false)
+    public static Result Apply(IReadOnlyList<Target> targets, Action<string> log, bool dryRun = false,
+        bool adoptByFsrar = false)
     {
         var started = new List<string>();
         var failed = new List<string>();
@@ -51,6 +59,16 @@ public static class BootBringUp
         var bySerial = new Dictionary<string, Target>(StringComparer.OrdinalIgnoreCase);
         foreach (var t in targets)
             if (!string.IsNullOrEmpty(t.ExpectedSerial)) bySerial[t.ExpectedSerial] = t;
+
+        // САМОПОДХВАТ по ФСРАР: УТМ без серийника, но с ожидаемым ФСРАР — сопоставим с
+        // присутствующим токеном по ФСРАР и привяжем. Существующие привязки (по серийнику)
+        // не трогаем; матч только для serial-less УТМ. У пустого КЭП ФСРАР нет → не подхватим.
+        var byFsrar = new Dictionary<string, Target>(StringComparer.OrdinalIgnoreCase);
+        if (adoptByFsrar)
+            foreach (var t in targets)
+                if (string.IsNullOrEmpty(t.ExpectedSerial) && !string.IsNullOrEmpty(t.Fsrar) && !byFsrar.ContainsKey(t.Fsrar!))
+                    byFsrar[t.Fsrar!] = t;
+        var adopted = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); // служба → подхваченный серийник
 
         // --- Режим проверки: НИЧЕГО не трогаем и НЕ сканируем PKCS11 (УТМ могут
         //     работать; скан занятых токенов роняет процесс). Только печатаем план. ---
@@ -77,7 +95,7 @@ public static class BootBringUp
         // 2. Дождаться появления ВСЕХ токенов и один раз зафиксировать порядок слотов.
         //    Службы стоят → скан безопасен. После рестарта SCardSvr токены
         //    перечисляются не мгновенно (бывало «6 устройств, 4 карты») — ждём.
-        int expected = bySerial.Count;
+        int expected = bySerial.Count + byFsrar.Count;
         IReadOnlyList<TokenInfo> tokens = Array.Empty<TokenInfo>();
         var scanDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
         while (true)
@@ -119,16 +137,38 @@ public static class BootBringUp
             var pcsc = readers.ListReaders();
             string reader0 = pcsc.Count > 0 ? pcsc[0] : tok.ReaderName;
 
-            if (bySerial.TryGetValue(tok.Serial, out var target))
+            // Сопоставление: сначала по серийнику (точная привязка), затем — при самоподхвате —
+            // по ФСРАР для УТМ без серийника.
+            Target? target = null;
+            bool isAdopt = false;
+            if (bySerial.TryGetValue(tok.Serial, out var byS)) target = byS;
+            else if (adoptByFsrar && !string.IsNullOrEmpty(tok.FsrarId) && byFsrar.TryGetValue(tok.FsrarId!, out var byF))
+            { target = byF; isAdopt = true; }
+
+            if (target is not null)
             {
-                log($"→ Слот 0 = {tok.Serial} → поднимаю {target.Service} (порт {target.Port})");
+                log(isAdopt
+                    ? $"→ Слот 0 = {tok.Serial} (ФСРАР {tok.FsrarId}) → САМОПОДХВАТ {target.Service} (порт {target.Port}) — серийника не было"
+                    : $"→ Слот 0 = {tok.Serial} → поднимаю {target.Service} (порт {target.Port})");
                 if (!dryRun)
                 {
                     ServiceControl.Stop(target.Service, TimeSpan.FromSeconds(60));
                     Thread.Sleep(500);
                     bool run = ServiceControl.Start(target.Service, TimeSpan.FromSeconds(90));
+                    // WaitHttp сверяет ownerId == ожидаемого ФСРАР — для самоподхвата это и есть
+                    // гарантия, что подняли ИМЕННО тот токен (иначе серийник не запишем).
                     bool up = run && WaitHttp(http, target.Port, TimeSpan.FromSeconds(90), target.Fsrar, log);
-                    if (up) { started.Add(target.Service); log($"  ✓ {target.Service} готов"); }
+                    if (up)
+                    {
+                        started.Add(target.Service);
+                        log($"  ✓ {target.Service} готов");
+                        if (isAdopt)
+                        {
+                            adopted[target.Service] = tok.Serial;
+                            byFsrar.Remove(tok.FsrarId!);
+                            log($"  ↳ самоподхват: серийник {tok.Serial} → {target.Service} (запишется в state.json)");
+                        }
+                    }
                     else { failed.Add(target.Service); log($"  ✗ {target.Service} НЕ поднялся вовремя"); }
                 }
                 else log($"[dry] стоп/старт {target.Service}, ждать http://127.0.0.1:{target.Port}");
@@ -148,9 +188,11 @@ public static class BootBringUp
             else log($"[dry] forget '{reader0}'");
         }
 
-        bool ok = failed.Count == 0 && started.Count == targets.Count(t => tokens.Any(k => k.Serial.Equals(t.ExpectedSerial, StringComparison.OrdinalIgnoreCase)));
+        bool ok = failed.Count == 0
+            && started.Count == targets.Count(t => tokens.Any(k => k.Serial.Equals(t.ExpectedSerial, StringComparison.OrdinalIgnoreCase))) + adopted.Count;
         log(ok ? "=== Подъём завершён успешно ===" : $"=== Подъём завершён: поднято {started.Count}, ошибок {failed.Count} ===");
-        return new Result(ok, started, failed, readerBySerial);
+        if (adopted.Count > 0) log($"самоподхват: привязано новых серийников — {adopted.Count}");
+        return new Result(ok, started, failed, readerBySerial) { AdoptedSerialByService = adopted };
     }
 
     /// <summary>

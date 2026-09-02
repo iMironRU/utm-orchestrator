@@ -940,11 +940,14 @@ app.MapPost("/api/utm/rebind-all", () =>
 {
     if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
     var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    // Цель = УТМ с серийником (точная привязка) ИЛИ без серийника, но с ожидаемым ФСРАР
+    // (самоподхват: сопоставим с присутствующим токеном по ФСРАР и запишем серийник).
     var targets = state.Instances
-        .Where(i => !string.IsNullOrEmpty(i.TokenSerial))
-        .Select(i => new BootBringUp.Target(i.ServiceName, i.Port, i.TokenSerial!, i.ExpectedFsrar, i.ReaderName))
+        .Where(i => !string.IsNullOrEmpty(i.TokenSerial) || !string.IsNullOrEmpty(i.ExpectedFsrar))
+        .Select(i => new BootBringUp.Target(i.ServiceName, i.Port, i.TokenSerial ?? "", i.ExpectedFsrar, i.ReaderName))
         .ToList();
     if (targets.Count == 0) return Results.BadRequest(new { error = "нет привязок в state.json" });
+    int adoptable = state.Instances.Count(i => string.IsNullOrEmpty(i.TokenSerial) && !string.IsNullOrEmpty(i.ExpectedFsrar));
 
     if (!ReaderOp.Gate.Wait(0))
         return Results.Conflict(new { error = "уже идёт операция с ридерами — попробуйте позже" });
@@ -954,29 +957,33 @@ app.MapPost("/api/utm/rebind-all", () =>
         using var _ = BringUpStatus.Begin();
         try
         {
-            ReaderOp.FileLog($"=== rebind-all (серийная привязка {targets.Count} УТМ по токенам) ===");
-            var r = BootBringUp.Apply(targets, ReaderOp.FileLog);
-            // Сохраняем фактически наблюдённые имена ридеров — на новой машине они другие,
-            // а без корректного ReaderName последующие introduce-перезапуски/лечение сломаются.
-            if (r.ReaderBySerial.Count > 0)
+            ReaderOp.FileLog($"=== rebind-all (серийная привязка {targets.Count} УТМ; самоподхват по ФСРАР для {adoptable}) ===");
+            var r = BootBringUp.Apply(targets, ReaderOp.FileLog, dryRun: false, adoptByFsrar: true);
+
+            var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+            bool changed = false;
+            // 1) Записать серийники, подхваченные по ФСРАР (УТМ, у которых серийника не было).
+            foreach (var kv in r.AdoptedSerialByService)
             {
-                var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
-                bool changed = false;
+                var inst = st.Instances.FirstOrDefault(i => string.Equals(i.ServiceName, kv.Key, StringComparison.OrdinalIgnoreCase));
+                if (inst is not null && !string.Equals(inst.TokenSerial, kv.Value, StringComparison.OrdinalIgnoreCase))
+                { inst.TokenSerial = kv.Value; changed = true; ReaderOp.FileLog($"rebind-all: самоподхват {kv.Key} ← серийник {kv.Value}"); }
+            }
+            // 2) Обновить наблюдённые имена ридеров (в т.ч. для только что подхваченных) —
+            //    без корректного ReaderName introduce-перезапуски/лечение сломаются.
+            if (r.ReaderBySerial.Count > 0)
                 foreach (var i in st.Instances)
-                {
                     if (!string.IsNullOrEmpty(i.TokenSerial)
                         && r.ReaderBySerial.TryGetValue(i.TokenSerial!, out var rn)
                         && !string.Equals(i.ReaderName, rn, StringComparison.OrdinalIgnoreCase))
                     { i.ReaderName = rn; changed = true; }
-                }
-                if (changed) { st.Save(OrchestratorState.DefaultPath); ReaderOp.FileLog("rebind-all: имена ридеров обновлены в state.json"); }
-            }
-            ReaderOp.FileLog($"rebind-all: поднято {r.Started.Count}, ошибок {r.Failed.Count}");
+            if (changed) { st.Save(OrchestratorState.DefaultPath); ReaderOp.FileLog("rebind-all: state.json обновлён (серийники/ридеры)"); }
+            ReaderOp.FileLog($"rebind-all: поднято {r.Started.Count}, ошибок {r.Failed.Count}, подхвачено {r.AdoptedSerialByService.Count}");
         }
         catch (Exception e) { ReaderOp.FileLog($"rebind-all: СБОЙ — {e}"); }
         finally { ReaderOp.Gate.Release(); }
     });
-    return Results.Accepted(value: new { ok = true, count = targets.Count });
+    return Results.Accepted(value: new { ok = true, count = targets.Count, adoptable });
 });
 
 // --- Прямая привязка токена к УТМ по серийнику (без матчинга по ФСРАР) ---
