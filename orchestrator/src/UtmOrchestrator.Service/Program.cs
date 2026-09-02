@@ -1328,21 +1328,36 @@ app.MapPost("/api/utm/update", (RestartRequest req, NameStore names, OrgInfoCach
     return Results.Accepted(value: new { ok = true, service = req.Service });
 });
 
-app.MapPost("/api/utm/update-all", () =>
+app.MapPost("/api/utm/update-all", (NameStore names, OrgInfoCache orgCache) =>
 {
     if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
     if (!Directory.Exists(Path.Combine(utmUpdApp, "transporter")))
         return Results.BadRequest(new { error = "сначала «Проверить обновления УТМ»" });
     var state = OrchestratorState.Load(OrchestratorState.DefaultPath);
-    var services = state.Instances.Where(i => !string.IsNullOrWhiteSpace(i.FolderPath)).Select(i => i.ServiceName).ToList();
-    if (services.Count == 0) return Results.BadRequest(new { error = "нет УТМ" });
+    var insts = state.Instances.Where(i => !string.IsNullOrWhiteSpace(i.FolderPath)).ToList();
+    if (insts.Count == 0) return Results.BadRequest(new { error = "нет УТМ" });
+    // Название для прогресса: кастомное имя → юрлицо из кэша → имя службы (не «TransportN»).
+    string DispOf(UtmInstance i) => names.Get(i.TokenSerial)
+        ?? (!string.IsNullOrEmpty(i.ExpectedFsrar) && orgCache.TryGet(i.ExpectedFsrar!, out var oi) ? oi.Display : null)
+        ?? i.ServiceName;
+    var services = insts.Select(i => (i.ServiceName, Disp: DispOf(i))).ToList();
     if (!ReaderOp.Gate.Wait(0)) return Results.Conflict(new { error = "уже идёт операция — попробуйте позже" });
     _ = Task.Run(() =>
     {
         using var _ = BringUpStatus.Begin();
         OpProgress.Start("Обновление УТМ", services.Count);
         int done = 0;
-        try { foreach (var s in services) { OpProgress.Update(done, "обновляю…", s); UpdateOneUtm(s, utmUpdApp, ReaderOp.FileLog); done++; } }
+        try
+        {
+            foreach (var (svc, disp) in services)
+            {
+                int step = done; // номер текущего УТМ для прогресс-бара
+                OpProgress.Update(step, "обновляю…", disp);
+                Action<string> plog = m => { ReaderOp.FileLog(m); OpProgress.Update(step, m.Length > 55 ? m.Substring(0, 55) + "…" : m, disp); };
+                UpdateOneUtm(svc, utmUpdApp, plog);
+                done++;
+            }
+        }
         catch (Exception e) { ReaderOp.FileLog($"update-all: СБОЙ — {e}"); }
         finally { OpProgress.Finish(); ReaderOp.Gate.Release(); }
     });

@@ -2414,7 +2414,6 @@
     },
 
     /* токены */
-    resetReaders: function () { notReady('Сброс ридеров (используйте «Полечить токены»)'); },
 
     /* Скан токенов через трей (для установки/обследования). */
     scanTokens: function () {
@@ -2640,7 +2639,7 @@
     bulkExport: 1, bulkStop: 1, bulkCheckDocs: 1, changePort: 1, checkUtmUpd: 1,
     cleanupFlat: 1, commitImport: 1, confirmDelete: 1, exportUtm: 1, healTokens: 1,
     importPicked: 1, queryUnprocessed: 1, queryUnprocessedAll: 1, raiseAll: 1,
-    rebindAll: 1, relocateAll: 1, relocateUtm: 1, resetReaders: 1, restore2Utm: 1,
+    rebindAll: 1, relocateAll: 1, relocateUtm: 1, restore2Utm: 1,
     saveExternalPort: 1, scanTokens: 1, setFirewallNo: 1, setFirewallYes: 1,
     stopUtm: 1, toggleFirewall: 1, uninstallOrchestrator: 1, updateAllUtm: 1,
     updateUtm: 1, updateOrchestrator: 1, utmPrimary: 1,
