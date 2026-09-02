@@ -873,7 +873,9 @@
       }
       var scanBtn2 = state.scanning
         ? '<button disabled style="opacity:.6;background:' + c.brand + ';border:none;color:#fff;padding:8px 14px;border-radius:8px;font:600 12px system-ui,sans-serif;">Сканирую…</button>'
-        : '<button data-action="scanTokens" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12px system-ui,sans-serif;cursor:pointer;">' + (state.scannedTokens ? 'Пересканировать токены' : 'Сканировать токены') + '</button>';
+        : trayOnline()
+          ? '<button data-action="scanTokens" style="background:transparent;border:1px solid ' + c.borderStrong + ';color:' + c.textPrimary + ';padding:8px 14px;border-radius:8px;font:600 12px system-ui,sans-serif;cursor:pointer;">' + (state.scannedTokens ? 'Пересканировать токены' : 'Сканировать токены') + '</button>'
+          : '<button disabled title="Приложение в трее на этом компьютере не запущено" style="opacity:.5;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textTertiary + ';padding:8px 14px;border-radius:8px;font:600 12px system-ui,sans-serif;cursor:not-allowed;">Скан недоступен — нет трея</button>';
       rebindBlock = '<div style="display:flex;flex-direction:column;gap:9px;padding:14px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
         '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Привязать токен</div>' +
         '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Заменили токен? Вставьте новый, отсканируйте и привяжите к этому УТМ по серийнику — УТМ поднимется (~1-2 мин). ФСРАР в сертификате не требуется. Показаны свободные токены; уже привязанные — под спойлером.</div>' +
@@ -1068,10 +1070,12 @@
         '<div style="font:13px/1.55 system-ui,sans-serif;color:' + c.textPrimary + ';padding-top:1px;">' + esc(s) + '</div></div>';
     }).join('');
 
-    // Рабочий скан токенов через трей (связка веб↔трей).
+    // Рабочий скан токенов через трей (связка веб↔трей). Без трея — гасим (панель открыта удалённо).
     var scanBtn = state.scanning
       ? '<button disabled style="opacity:.6;background:' + c.brand + ';border:none;color:#fff;padding:10px 18px;border-radius:8px;font:600 13px system-ui,sans-serif;">Сканирую токены…</button>'
-      : '<button data-action="scanTokens" style="background:' + c.brand + ';border:none;color:#fff;padding:10px 18px;border-radius:8px;font:600 13px system-ui,sans-serif;cursor:pointer;">Сканировать токены сейчас</button>';
+      : trayOnline()
+        ? '<button data-action="scanTokens" style="background:' + c.brand + ';border:none;color:#fff;padding:10px 18px;border-radius:8px;font:600 13px system-ui,sans-serif;cursor:pointer;">Сканировать токены сейчас</button>'
+        : '<button disabled title="Приложение в трее на этом компьютере не запущено" style="opacity:.5;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textTertiary + ';padding:10px 18px;border-radius:8px;font:600 13px system-ui,sans-serif;cursor:not-allowed;">Скан недоступен — нет трея</button>';
     var scanResult = '';
     if (state.scannedTokens) {
       if (!state.scannedTokens.length) {
@@ -1117,9 +1121,12 @@
       }
     }
 
+    var trayWarn = trayOnline() ? '' :
+      '<div style="font:12px/1.5 system-ui,sans-serif;color:' + c.warn + ';background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:8px;padding:9px 11px;">Приложение в трее на этом компьютере не запущено — скан токенов недоступен. Откройте панель <b>с самого компьютера</b> (где вставлены токены) и проверьте, что значок в трее есть.</div>';
     var scanCard = '<div style="display:flex;flex-direction:column;gap:12px;padding:20px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
       '<div style="font:700 14px system-ui,sans-serif;color:' + c.textPrimary + ';">Обследование: токены на компьютере</div>' +
       '<div style="font:12px/1.5 system-ui,sans-serif;color:' + c.textSecondary + ';">Читаются через приложение в трее (интерактивно). Работает, когда панель открыта с самого компьютера и трей запущен.</div>' +
+      trayWarn +
       '<div>' + scanBtn + '</div>' + scanResult + batchBtn + adoptSection +
     '</div>';
 
@@ -1804,6 +1811,9 @@
   function busyStop() { if (state.clientOp && state.clientOp.active) setState({ clientOp: { active: false } }); }
   // Честная заглушка: функция ещё не реализована — не притворяемся успехом.
   function notReady(what) { showToast((what || 'Функция') + ' — в разработке'); }
+  // На связи ли трей (интерактивная сессия на этой машине). Скан токенов/мастер установки
+  // читают физический токен через трей — без него панель гасит эти кнопки.
+  function trayOnline() { return !!(state.liveStatus && state.liveStatus.trayOnline); }
 
   /* ====================== ПОДТВЕРЖДЕНИЕ (своя модалка вместо window.confirm) ====================== */
   // Колбэк «да» держим вне state (функции не рендерятся): модалка выставляет

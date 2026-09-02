@@ -117,8 +117,11 @@ app.MapPost("/api/auth/logout", (HttpContext ctx) =>
 });
 
 // --- API статуса (read-only) ---
-app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCache orgCache, CancellationToken ct) =>
+app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCache orgCache, UtmOrchestrator.Service.Jobs.JobStore jobs, CancellationToken ct) =>
 {
+    // На связи ли трей (интерактивная сессия на этой машине) — от этого зависит доступность
+    // скана токенов/мастера установки в вебе. Панель гасит эти кнопки, если трея нет.
+    bool trayOnline = jobs.TrayOnline;
     // БЫСТРЫЙ ПУТЬ во время подъёма: не ходим по HTTP к ещё не поднятым УТМ (это заняло
     // бы десятки секунд и панель/трей «висели» бы). Отдаём живой прогресс из BootProgress:
     // кого уже подняли — Ok, остальные — «Запускается…», + фаза и прогноз (ETA).
@@ -151,6 +154,7 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
             ok = boot.Ready,
             faulty = 0,
             bringUp = true,
+            trayOnline,
             boot = new
             {
                 active = true,
@@ -185,6 +189,7 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
             ok = 0,
             faulty = 0,
             bringUp = true,
+            trayOnline,
             op = new { active = true, title = opNow.Title, total = opNow.Total, done = opNow.Done, phase = opNow.Phase, current = opNow.Current },
             orchestratorVersion = UtmOrchestrator.Core.AppInfo.Version,
             maxUtms,
@@ -211,7 +216,7 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
         }).ToList();
         return Results.Json(new
         {
-            total = stb.Instances.Count, ok = 0, faulty = 0, bringUp = true,
+            total = stb.Instances.Count, ok = 0, faulty = 0, bringUp = true, trayOnline,
             orchestratorVersion = UtmOrchestrator.Core.AppInfo.Version,
             machine = Environment.MachineName, maxUtms, instances = busyList,
         });
@@ -321,6 +326,7 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
         ok,
         faulty = health.Count - ok,
         bringUp = BringUpStatus.Active, // идёт подъём/перепривязка — «не отвечает» это норма
+        trayOnline,                          // на связи ли трей (для скана/мастера установки)
         orchestratorVersion = UtmOrchestrator.Core.AppInfo.Version,
         machine = Environment.MachineName,   // на какой машине работает панель
         lanIp = OperatingSystem.IsWindows() ? UtmOrchestrator.Core.Network.UpnpManager.LanIp() : null,
@@ -1520,6 +1526,7 @@ app.MapPost("/api/jobs", (JobCreateRequest req, UtmOrchestrator.Service.Jobs.Job
 
 app.MapGet("/api/jobs/pending", (UtmOrchestrator.Service.Jobs.JobStore jobs) =>
 {
+    jobs.MarkTraySeen(); // heartbeat: трей на связи (для индикатора trayOnline в статусе)
     var job = jobs.TakePending();
     return job is null
         ? Results.NoContent()

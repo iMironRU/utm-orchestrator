@@ -31,6 +31,19 @@ public sealed class JobStore
     private readonly ConcurrentDictionary<string, Job> _all = new();
     private readonly ConcurrentQueue<string> _pending = new();
 
+    // Heartbeat присутствия трея: трей опрашивает /api/jobs/pending каждые ~1.5с. Если
+    // опросов не было ~6с — считаем, что трея на этой машине нет (панель открыта удалённо).
+    private long _lastTraySeenTicks;
+    public void MarkTraySeen() => Interlocked.Exchange(ref _lastTraySeenTicks, DateTime.UtcNow.Ticks);
+    public bool TrayOnline
+    {
+        get
+        {
+            long t = Interlocked.Read(ref _lastTraySeenTicks);
+            return t != 0 && DateTime.UtcNow - new DateTime(t, DateTimeKind.Utc) < TimeSpan.FromSeconds(6);
+        }
+    }
+
     public Job Create(string type, string? prms)
     {
         var job = new Job { Type = type, Params = prms };
