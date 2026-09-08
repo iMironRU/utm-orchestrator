@@ -674,6 +674,7 @@
         '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(u.entity || u.org || '—') + '</div>' +
         '<div style="' + monoLine + 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">ИНН ' + esc(u.inn || '—') + ' · ФСРАР ' + esc(u.fsrarDisplay || '—') + '</div>' +
         '<div style="' + monoLine + '">порт ' + esc(u.port) + (u.version && u.version !== '—' ? ' · v' + esc(u.version) : '') + '</div>' +
+        '<div style="' + monoLine + 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><a data-action="openUtmWeb" data-port="' + esc(u.port) + '" title="Открыть веб-интерфейс этого УТМ (перевыпуск RSA и т.п.)" style="color:' + c.brand + ';cursor:pointer;text-decoration:none;">' + esc(location.hostname) + ':' + esc(u.port) + ' ↗</a></div>' +
       '</div>';
 
     // --- Обмен / документы ---
@@ -804,9 +805,10 @@
       orgLine + nameField +
     '</div>';
 
-    // Порт — кликабельный: открывает веб самого УТМ (как «Открыть УТМ ↗»).
-    var portCell = '<div style="min-width:0;overflow:hidden;"><div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';margin-bottom:3px;">Порт</div>' +
-      '<a data-action="openUtmWeb" data-port="' + esc(sel.port) + '" title="Открыть веб-интерфейс УТМ" style="font:13.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.brand + ';cursor:pointer;text-decoration:none;">' + esc(sel.port) + ' ↗</a></div>';
+    // Адрес — кликабельный: открывает веб самого УТМ (перевыпуск RSA и т.п.). Хост панели,
+    // чтобы адрес был верным и локально, и при удалённом доступе.
+    var portCell = '<div style="min-width:0;overflow:hidden;"><div style="font:11px system-ui,sans-serif;color:' + c.textTertiary + ';margin-bottom:3px;">Адрес</div>' +
+      '<a data-action="openUtmWeb" data-port="' + esc(sel.port) + '" title="Открыть веб-интерфейс УТМ" style="font:13.5px ui-monospace,Menlo,Consolas,monospace;color:' + c.brand + ';cursor:pointer;text-decoration:none;">' + esc(location.hostname) + ':' + esc(sel.port) + ' ↗</a></div>';
 
     var info = '<div style="display:grid;grid-template-columns:' + infoCols + ';gap:12px;padding:14px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
       portCell +
@@ -2084,7 +2086,8 @@
     },
     openUtmWeb: function (el) {
       var port = el.getAttribute('data-port');
-      if (port) window.open('http://localhost:' + port + '/', '_blank');
+      // Хост панели (а не localhost) — чтобы «Открыть» работал и удалённо (телефон/другая машина).
+      if (port) window.open(location.protocol + '//' + location.hostname + ':' + port + '/', '_blank');
     },
 
     /* тема / оболочка */
