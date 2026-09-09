@@ -2093,7 +2093,8 @@
             if (r.status === 409) { showToast('Уже идёт операция с ридерами — подождите'); return; }
             return r.json().catch(function () { return {}; }).then(function (d) {
               if (!r.ok) { showToast('Не удалось: ' + (d.error || 'ошибка')); return; }
-              showToast('Привязка идёт — следите за статусом на «Обзоре»');
+              showToast('Привязка идёт — следите за прогрессом');
+              pollStatus(true); // сразу показать спиннер операции, не ждать таймер
             });
           })
           .catch(function () { showToast('Ошибка запроса привязки'); });

@@ -964,10 +964,12 @@ app.MapPost("/api/utm/rebind-all", () =>
     _ = Task.Run(() =>
     {
         using var _ = BringUpStatus.Begin();
+        OpProgress.Start("Привязка всех токенов по серийникам", 1); // спиннер с живой фазой (~1-2 мин на УТМ)
         try
         {
-            ReaderOp.FileLog($"=== rebind-all (серийная привязка {targets.Count} УТМ; самоподхват по ФСРАР для {adoptable}) ===");
-            var r = BootBringUp.Apply(targets, ReaderOp.FileLog, dryRun: false, adoptByFsrar: true);
+            Action<string> plog = m => { ReaderOp.FileLog(m); OpProgress.Update(0, m.Length > 55 ? m.Substring(0, 55) + "…" : m, ""); };
+            plog($"=== rebind-all (серийная привязка {targets.Count} УТМ; самоподхват по ФСРАР для {adoptable}) ===");
+            var r = BootBringUp.Apply(targets, plog, dryRun: false, adoptByFsrar: true);
 
             var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
             bool changed = false;
@@ -990,7 +992,7 @@ app.MapPost("/api/utm/rebind-all", () =>
             ReaderOp.FileLog($"rebind-all: поднято {r.Started.Count}, ошибок {r.Failed.Count}, подхвачено {r.AdoptedSerialByService.Count}");
         }
         catch (Exception e) { ReaderOp.FileLog($"rebind-all: СБОЙ — {e}"); }
-        finally { ReaderOp.Gate.Release(); }
+        finally { OpProgress.Finish(); ReaderOp.Gate.Release(); }
     });
     return Results.Accepted(value: new { ok = true, count = targets.Count, adoptable });
 });
@@ -1399,15 +1401,17 @@ app.MapPost("/api/utm/heal", () =>
     _ = Task.Run(() =>
     {
         using var _ = BringUpStatus.Begin();
+        OpProgress.Start("Подъём всех УТМ (лечение)", 1); // спиннер с живой фазой (~1-2 мин на УТМ)
         try
         {
-            ReaderOp.FileLog("=== heal (лечение токенов) через службу запущен ===");
-            UtmOrchestrator.Core.Readers.ReaderReset.ResetToNative(targets.Select(t => t.Service), ReaderOp.FileLog);
-            var r = BootBringUp.ApplyIntroduce(targets, ReaderOp.FileLog);
-            ReaderOp.FileLog($"heal: поднято {r.Started.Count}, ошибок {r.Failed.Count}, успех={r.Success}");
+            Action<string> plog = m => { ReaderOp.FileLog(m); OpProgress.Update(0, m.Length > 55 ? m.Substring(0, 55) + "…" : m, ""); };
+            plog("=== heal (лечение токенов) через службу запущен ===");
+            UtmOrchestrator.Core.Readers.ReaderReset.ResetToNative(targets.Select(t => t.Service), plog);
+            var r = BootBringUp.ApplyIntroduce(targets, plog);
+            plog($"heal: поднято {r.Started.Count}, ошибок {r.Failed.Count}, успех={r.Success}");
         }
         catch (Exception e) { ReaderOp.FileLog($"heal: СБОЙ — {e}"); }
-        finally { ReaderOp.Gate.Release(); }
+        finally { OpProgress.Finish(); ReaderOp.Gate.Release(); }
     });
     return Results.Accepted(value: new { ok = true, healing = true });
 });
