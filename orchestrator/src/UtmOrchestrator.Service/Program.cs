@@ -1203,6 +1203,29 @@ static bool UpdateOneUtm(string service, string templateApp, Action<string> log)
     return up;
 }
 
+// Только заменить файлы одного УТМ (стоп службы + apply шаблона), БЕЗ подъёма. Подъём —
+// отдельным единым peel-down для всего парка (безопасно: никто не держит токен). Для update-all,
+// чтобы не дёргать ридеры на каждый УТМ (это роняло уже поднятых соседей). Возвращает данные
+// для отката, либо null если папки нет.
+static (string service, string folder, string backupDir, UtmOrchestrator.Core.Install.UtmUpdater.ApplyResult res)?
+    ApplyUtmFiles(string service, string templateApp, Action<string> log)
+{
+    var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var inst = st.Instances.FirstOrDefault(i => string.Equals(i.ServiceName, service, StringComparison.OrdinalIgnoreCase));
+    if (inst is null || string.IsNullOrWhiteSpace(inst.FolderPath) || !Directory.Exists(inst.FolderPath))
+    { log($"update {service}: папка УТМ не найдена — пропуск"); return null; }
+
+    string folder = inst.FolderPath;
+    string backupDir = Path.Combine(UtmOrchestrator.Core.AppPaths.CacheDir, "utm-update-backups",
+        service + "_" + System.DateTime.Now.ToString("yyyyMMdd_HHmmss"));
+    log($"=== update УТМ {service}: {folder} (бэкап: {backupDir}) ===");
+    UtmOrchestrator.Core.Services.ServiceControl.Stop(service, TimeSpan.FromSeconds(60));
+    System.Threading.Thread.Sleep(800);
+    var res = UtmOrchestrator.Core.Install.UtmUpdater.Apply(folder, templateApp, backupDir, dryRun: false, log);
+    log($"update {service}: файлы обновлены (изменений {res.Total})");
+    return (service, folder, backupDir, res);
+}
+
 // Кто из переданных экземпляров сейчас реально поднят: порт отвечает, RSA ok и (если знаем)
 // ownerId = ожидаемый ФСРАР. Недоступен/чужой ФСРАР = не считаем поднятым.
 static List<string> ProbeHealthy(IEnumerable<UtmInstance> insts, Action<string> log)
@@ -1363,18 +1386,49 @@ app.MapPost("/api/utm/update-all", (NameStore names, OrgInfoCache orgCache) =>
     _ = Task.Run(() =>
     {
         using var _ = BringUpStatus.Begin();
-        OpProgress.Start("Обновление УТМ", services.Count);
+        // +1 шаг на общий подъём парка в конце.
+        OpProgress.Start("Обновление УТМ", services.Count + 1);
         int done = 0;
         try
         {
+            // ФАЗА 1: заменить файлы КАЖДОМУ УТМ (службы останавливаются), БЕЗ подъёма.
+            // Не дёргаем ридеры по одному — иначе forget-all роняет уже поднятых соседей.
+            var applied = new List<(string service, string folder, string backupDir, UtmOrchestrator.Core.Install.UtmUpdater.ApplyResult res)>();
             foreach (var (svc, disp) in services)
             {
-                int step = done; // номер текущего УТМ для прогресс-бара
-                OpProgress.Update(step, "обновляю…", disp);
+                int step = done;
                 Action<string> plog = m => { ReaderOp.FileLog(m); OpProgress.Update(step, m.Length > 55 ? m.Substring(0, 55) + "…" : m, disp); };
-                UpdateOneUtm(svc, utmUpdApp, plog);
+                OpProgress.Update(step, "заменяю файлы…", disp);
+                var a = ApplyUtmFiles(svc, utmUpdApp, plog);
+                if (a is not null) applied.Add(a.Value);
                 done++;
             }
+
+            // ФАЗА 2: ОДИН безопасный подъём всего парка (стоп всех + introduce по одному —
+            // никто не держит токен, forget не мешает). Так соседи не падают.
+            OpProgress.Update(done, "поднимаю парк (introduce по одному)…", "");
+            var st2 = OrchestratorState.Load(OrchestratorState.DefaultPath);
+            var targets = st2.Instances.Where(i => !string.IsNullOrEmpty(i.TokenSerial))
+                .Select(i => new BootBringUp.Target(i.ServiceName, i.Port, i.TokenSerial!, i.ExpectedFsrar, i.ReaderName)).ToList();
+            var r = BootBringUp.ApplyIntroduce(targets, ReaderOp.FileLog);
+            ReaderOp.FileLog($"update-all: подъём — поднято {r.Started.Count}, ошибок {r.Failed.Count}");
+
+            // ФАЗА 3: откат тех ОБНОВЛЁННЫХ, кто реально не встал (защита от «плохой сборки»).
+            var failed = applied.Where(a => a.res.Total > 0
+                && r.Failed.Contains(a.service, StringComparer.OrdinalIgnoreCase)).ToList();
+            if (failed.Count > 0)
+            {
+                foreach (var a in failed)
+                {
+                    ReaderOp.FileLog($"update-all: {a.service} не поднялся — ОТКАТ из бэкапа");
+                    UtmOrchestrator.Core.Services.ServiceControl.Stop(a.service, TimeSpan.FromSeconds(60));
+                    System.Threading.Thread.Sleep(500);
+                    UtmOrchestrator.Core.Install.UtmUpdater.Restore(a.folder, a.backupDir, a.res.Added, ReaderOp.FileLog);
+                }
+                var r2 = BootBringUp.ApplyIntroduce(targets, ReaderOp.FileLog);
+                ReaderOp.FileLog($"update-all: после отката — поднято {r2.Started.Count}, ошибок {r2.Failed.Count}");
+            }
+            done++;
         }
         catch (Exception e) { ReaderOp.FileLog($"update-all: СБОЙ — {e}"); }
         finally { OpProgress.Finish(); ReaderOp.Gate.Release(); }
