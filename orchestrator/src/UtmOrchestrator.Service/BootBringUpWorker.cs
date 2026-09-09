@@ -80,11 +80,19 @@ public sealed class BootBringUpWorker : BackgroundService
         Log($"все Running: {allRunning}");
         if (allRunning)
         {
-            Log("Все УТМ уже Running — подъём не требуется, выход.");
-            return;
+            // Второй пояс: даже если все Running, проверим, что каждый на СВОЁМ токене —
+            // служба могла подняться на чужом (если что-то стартовало её в обход Manual).
+            // Если все на своих — выходим; иначе падаем в introduce-подъём (он остановит и пересадит).
+            var misseated = DetectMisseated(targets, Log);
+            if (misseated.Count == 0)
+            {
+                Log("Все УТМ уже Running и на своих токенах — подъём не требуется, выход.");
+                return;
+            }
+            Log($"ВНИМАНИЕ: {misseated.Count} УТМ на ЧУЖИХ токенах [{string.Join(", ", misseated)}] — пересаживаю через introduce-подъём.");
         }
-
-        Log("Обнаружен старт с неподнятыми УТМ — запускаю introduce-подъём.");
+        else
+            Log("Обнаружен старт с неподнятыми УТМ — запускаю introduce-подъём.");
 
         // Синхронный introduce-подъём (PC/SC introduce из конфига, без рестарта
         // SCardSvr) — в отдельном потоке, чтобы не блокировать хост/панель.
@@ -116,5 +124,39 @@ public sealed class BootBringUpWorker : BackgroundService
                 BootProgress.Finish();
             }
         }, stoppingToken);
+    }
+
+    /// <summary>
+    /// Кто из запущенных УТМ сидит на ЧУЖОМ токене. Определённые признаки (не путать с
+    /// «нужен перевыпуск RSA»): либо УТМ прочитал ownerId и он НЕ равен ожидаемому ФСРАР,
+    /// либо сам УТМ сообщает, что FSRAR_ID сертификата не соответствует его первичной
+    /// инициализации. Состояние «нужен перевыпуск RSA» (нет подходящего сертификата,
+    /// но токен свой) сюда НЕ попадает — пересаживать его не нужно.
+    /// </summary>
+    private static List<string> DetectMisseated(List<BootBringUp.Target> targets, Action<string> log)
+    {
+        var bad = new List<string>();
+        try
+        {
+            using var http = new UtmOrchestrator.Core.Diagnostics.UtmHttpClient(TimeSpan.FromSeconds(4));
+            foreach (var t in targets)
+            {
+                if (t.Port <= 0) continue;
+                var info = http.GetInfoAsync(t.Port).GetAwaiter().GetResult();
+                if (info is null) continue; // не ответил (ещё грузится) — не трогаем
+
+                bool wrongOwner = !string.IsNullOrEmpty(t.Fsrar) && !string.IsNullOrEmpty(info.OwnerId)
+                    && !string.Equals(info.OwnerId, t.Fsrar, StringComparison.OrdinalIgnoreCase);
+                bool initMismatch = !string.IsNullOrEmpty(info.RsaError)
+                    && (info.RsaError.Contains("первичной инициализации") || info.RsaError.Contains("не соответствует"));
+                if (wrongOwner || initMismatch)
+                {
+                    bad.Add(t.Service);
+                    log($"  {t.Service} :{t.Port} на ЧУЖОМ токене (ownerId={info.OwnerId ?? "-"}, ожидался {t.Fsrar ?? "-"}{(initMismatch ? "; УТМ: FSRAR_ID ≠ первичной инициализации" : "")})");
+                }
+            }
+        }
+        catch (Exception e) { log($"проверка посадки токенов: {e.Message}"); }
+        return bad;
     }
 }
