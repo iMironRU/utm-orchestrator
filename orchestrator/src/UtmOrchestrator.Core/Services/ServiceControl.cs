@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.ServiceProcess;
 
@@ -12,6 +13,9 @@ public enum ServiceState
     Running,
     Other,
 }
+
+/// <summary>Тип запуска службы (для управления автозагрузкой УТМ).</summary>
+public enum StartMode { Automatic, Manual, Disabled, Unknown }
 
 /// <summary>
 /// Управление Windows-службами Transport* (start/stop/query с ожиданием).
@@ -43,6 +47,58 @@ public static class ServiceControl
     }
 
     public static bool IsRunning(string serviceName) => GetState(serviceName) == ServiceState.Running;
+
+    /// <summary>Текущий тип запуска службы (auto/manual/disabled). Unknown, если не удалось прочитать.</summary>
+    public static StartMode GetStartMode(string serviceName)
+    {
+        try
+        {
+            using var sc = new ServiceController(serviceName);
+            return sc.StartType switch
+            {
+                ServiceStartMode.Automatic => StartMode.Automatic,
+                ServiceStartMode.Manual => StartMode.Manual,
+                ServiceStartMode.Disabled => StartMode.Disabled,
+                _ => StartMode.Unknown,
+            };
+        }
+        catch { return StartMode.Unknown; }
+    }
+
+    /// <summary>Сменить тип запуска службы через <c>sc config</c> (нужны права администратора;
+    /// служба = LocalSystem = админ). true при успехе. Идемпотентно на стороне вызывающего.</summary>
+    public static bool SetStartMode(string serviceName, StartMode mode, Action<string>? log = null)
+    {
+        string arg = mode switch
+        {
+            StartMode.Automatic => "auto",
+            StartMode.Manual => "demand",
+            StartMode.Disabled => "disabled",
+            _ => "demand",
+        };
+        try
+        {
+            // ВАЖНО: синтаксис sc — "start= demand" (пробел ПОСЛЕ '='). Токенизируется как два аргумента.
+            var psi = new ProcessStartInfo("sc.exe", $"config \"{serviceName}\" start= {arg}")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            using var p = Process.Start(psi)!;
+            string o = p.StandardOutput.ReadToEnd();
+            string e = p.StandardError.ReadToEnd();
+            p.WaitForExit(15000);
+            if (p.ExitCode != 0)
+            {
+                log?.Invoke($"sc config {serviceName} start= {arg}: exit {p.ExitCode} {o.Trim()} {e.Trim()}".Trim());
+                return false;
+            }
+            return true;
+        }
+        catch (Exception ex) { log?.Invoke($"SetStartMode {serviceName}: {ex.Message}"); return false; }
+    }
 
     /// <summary>Запустить и дождаться Running (или таймаут). true, если Running.</summary>
     public static bool Start(string serviceName, TimeSpan timeout)

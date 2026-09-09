@@ -63,6 +63,17 @@ public sealed class BootBringUpWorker : BackgroundService
             return;
         }
 
+        // КОРЕНЬ проблемы «после ребута УТМ на чужих токенах»: службы в Automatic Windows
+        // поднимает сам ещё до нашего peel-down, и каждая хватает токен со слота 0 (чужой).
+        // Автозапуском УТМ должен владеть ТОЛЬКО оркестратор → переводим управляемые службы
+        // в Manual. Идемпотентно (меняем лишь Automatic). После ребута их поднимет этот воркер.
+        foreach (var t in targets)
+        {
+            if (ServiceControl.GetStartMode(t.Service) == StartMode.Automatic
+                && ServiceControl.SetStartMode(t.Service, StartMode.Manual, Log))
+                Log($"{t.Service}: тип запуска Automatic → Manual (автоподъём УТМ — только оркестратор)");
+        }
+
         // Защита от повторного подъёма: если ВСЕ целевые службы уже Running — считаем,
         // что это не загрузка, а перезапуск службы; подъём не трогаем.
         bool allRunning = targets.All(t => ServiceControl.GetState(t.Service) == ServiceState.Running);
