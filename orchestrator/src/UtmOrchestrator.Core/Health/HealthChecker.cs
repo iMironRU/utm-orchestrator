@@ -67,7 +67,14 @@ public sealed class HealthChecker
             return (HealthVerdict.Faulty, "не отвечает по HTTP (ещё грузится или завис)");
 
         if (!info.RsaOk)
+        {
+            // GOST valid + RSA невалиден = токен сел и читается, но нужен перевыпуск RSA
+            // (типовое состояние после планового перевыпуска КЭП; RSA выпускается через УТМ).
+            // Это НЕ поломка — не пугаем «сбоем» и не churn'им bring-up'ом.
+            if (info.GostValid)
+                return (HealthVerdict.NeedRsa, "нужен перевыпуск RSA (КЭП перевыпущен — старый RSA невалиден)");
             return (HealthVerdict.Faulty, "ошибка ключа RSA (не тот токен на слоте 0 при старте?)");
+        }
 
         if (!string.IsNullOrEmpty(inst.ExpectedFsrar)
             && !string.Equals(info.OwnerId, inst.ExpectedFsrar, StringComparison.OrdinalIgnoreCase))

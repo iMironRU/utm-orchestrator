@@ -157,6 +157,7 @@
      verdict/state из /api/status → одна из 5 дизайн-статусов. */
   function mapStatus(inst) {
     if (inst.verdict === 'Ok') return 'ok';
+    if (inst.verdict === 'NeedRsa') return 'rsa';   // токен сел, ГОСТ ок, нужен перевыпуск RSA — не сбой
     if (inst.verdict === 'Faulty') return 'error';
     if (inst.verdict === 'Stopped') return 'stopped';
     // Во время подъёма: «запускается сейчас» и «в очереди» — это ход операции, не сбой
@@ -208,12 +209,13 @@
     var meta = {
       ok: { label: 'Работает', color: c.ok, bg: c.okBg },
       warn: { label: 'Внимание', color: c.warn, bg: c.warnBg },
+      rsa: { label: 'Нужен перевыпуск RSA', color: c.warn, bg: c.warnBg },
       error: { label: 'Сбой', color: c.error, bg: c.errorBg },
       stopped: { label: 'Остановлен', color: c.stopped, bg: c.stoppedBg },
       progress: { label: 'Идёт операция', color: c.progress, bg: c.progressBg },
     }[u.status];
     var isProgress = u.status === 'progress';
-    var hasCallout = u.status === 'warn' || u.status === 'error';
+    var hasCallout = u.status === 'warn' || u.status === 'error' || u.status === 'rsa';
     var hasMeta = u.status === 'ok' || u.status === 'stopped';
     var hasExchange = !isProgress;
     // Реальный обмен из лога УТМ (если есть), иначе — по статусу.
@@ -223,13 +225,14 @@
       if (ex.live) exchangeText = 'Обмен с ЕГАИС идёт · последний цикл ' + fmtSecs(ex.agoSeconds) + ' назад';
       else exchangeText = 'Обмен НЕ идёт · ' + fmtSecs(ex.agoSeconds) + ' без обмена';
     } else if (u.status === 'ok') exchangeText = 'Обмен с ЕГАИС идёт';
+    else if (u.status === 'rsa') exchangeText = 'Нужен перевыпуск RSA — обмен приостановлен';
     else if (u.status === 'warn') exchangeText = 'Обмен приостановлен';
     else if (u.status === 'error') exchangeText = 'Обмен остановлен';
     else if (u.status === 'stopped') exchangeText = 'Обмен не идёт';
     var primaryLabel = 'Перезапустить';
     if (u.status === 'warn') primaryLabel = 'Привязать токен';
     else if (u.status === 'stopped') primaryLabel = 'Запустить';
-    var line1 = u.status === 'ok' ? ('ФСРАР ' + (u.fsrar || '—')) : 'Остановлен вручную';
+    var line1 = (u.status === 'ok' || u.status === 'rsa') ? ('ФСРАР ' + (u.fsrar || '—')) : 'Остановлен вручную';
     var line2 = u.status === 'ok'
       ? (u.tokenSerial ? 'Rutoken · ' + u.tokenSerial : 'нет токена')
       : (u.stoppedAt || 'остановлен');
@@ -435,11 +438,11 @@
     var out = [];
     d.instances.forEach(function (inst) {
       var st = mapStatus(inst);
-      if (st === 'error' || st === 'warn') {
+      if (st === 'error' || st === 'warn' || st === 'rsa') {
         var name = inst.title || inst.service || ('порт ' + inst.port);
         out.push({
           level: st === 'error' ? 'error' : 'warn',
-          text: name + ' (порт ' + inst.port + '): ' + (inst.reason || (st === 'error' ? 'сбой' : 'требует внимания')),
+          text: name + ' (порт ' + inst.port + '): ' + (inst.reason || (st === 'error' ? 'сбой' : st === 'rsa' ? 'нужен перевыпуск RSA' : 'требует внимания')),
           time: state.lastCheck,
         });
       }
@@ -532,12 +535,19 @@
 
     var views = live.map(function (u) { return buildUtmView(u, c); });
     var okCount = live.filter(function (u) { return u.status === 'ok'; }).length;
+    var rsaCount = live.filter(function (u) { return u.status === 'rsa'; }).length;
     var total = live.length;
-    var problem = live.find(function (u) { return u.status === 'error'; }) || live.find(function (u) { return u.status === 'warn'; });
+    // rsa считаем «проблемой» для шапки (амбер), но с отдельной формулировкой — это не сбой.
+    var problem = live.find(function (u) { return u.status === 'error'; })
+      || live.find(function (u) { return u.status === 'warn'; })
+      || live.find(function (u) { return u.status === 'rsa'; });
     var heroOk = !problem;
-    var heroColor = heroOk ? c.ok : (problem.status === 'error' ? c.error : c.warn);
-    var heroBg = heroOk ? c.okBg : (problem.status === 'error' ? c.errorBg : c.warnBg);
-    var heroSubtitle = heroOk ? 'Все УТМ в порядке' : ('1 ' + (problem.status === 'error' ? 'сбой' : 'предупреждение') + ' требует внимания');
+    var heroSev = problem ? problem.status : 'ok';
+    var heroColor = heroOk ? c.ok : (heroSev === 'error' ? c.error : c.warn);
+    var heroBg = heroOk ? c.okBg : (heroSev === 'error' ? c.errorBg : c.warnBg);
+    var heroSubtitle = heroOk ? 'Все УТМ в порядке'
+      : (heroSev === 'rsa' ? (rsaCount + ' УТМ ждут перевыпуска RSA — откройте адрес и перевыпустите')
+         : ('1 ' + (heroSev === 'error' ? 'сбой' : 'предупреждение') + ' требует внимания'));
     var canFilter = !heroOk;
 
     // Во время подъёма (bringUp) — НЕ «требует внимания» и не «всё в порядке», а
@@ -552,7 +562,7 @@
       canFilter = false;
     }
     var filterActive = state.overviewFilter === 'problem';
-    var shown = filterActive ? views.filter(function (u) { return u.status === 'error' || u.status === 'warn'; }) : views;
+    var shown = filterActive ? views.filter(function (u) { return u.status === 'error' || u.status === 'warn' || u.status === 'rsa'; }) : views;
 
     var isMobile = state.isMobile;
     var heroDir = isMobile ? 'column' : 'row';
@@ -689,6 +699,7 @@
       var exText, exCol;
       if (exAgo != null) { exText = u.exchangeLive ? 'Обмен с ЕГАИС идёт' : 'Обмен с ЕГАИС не идёт'; exCol = u.exchangeLive ? c.ok : c.warn; }
       else if (u.status === 'ok') { exText = 'Обмен с ЕГАИС идёт'; exCol = c.ok; }
+      else if (u.status === 'rsa') { exText = u.reasonText || 'Нужен перевыпуск RSA'; exCol = c.warn; }
       else if (u.status === 'warn') { exText = u.reasonText || 'Обмен приостановлен'; exCol = c.warn; }
       else if (u.status === 'error') { exText = u.reasonText || 'Обмен остановлен'; exCol = c.error; }
       else if (u.status === 'stopped') { exText = 'Остановлен'; exCol = c.stopped; }
@@ -820,10 +831,20 @@
       infoCell('Токен', sel.tokenDisplay, true) +
     '</div>';
 
+    // Подсказка про перевыпуск RSA (после планового перевыпуска КЭП). Токен привязан
+    // правильно (ГОСТ читается) — нужен только перевыпуск RSA через сам УТМ.
+    var rsaHint = sel.status === 'rsa'
+      ? '<div style="display:flex;flex-direction:column;gap:6px;padding:14px;background:' + c.warnBg + ';border:1px solid ' + c.warn + ';border-radius:12px;">' +
+          '<div style="font:700 13px system-ui,sans-serif;color:' + c.warn + ';">Нужен перевыпуск RSA</div>' +
+          '<div style="font:12px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">КЭП перевыпущен — старый RSA-сертификат стал невалиден. Токен привязан верно (ГОСТ читается). Откройте веб-интерфейс УТМ по адресу выше и перевыпустите RSA — после этого обмен восстановится сам.</div>' +
+          '<div><a data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="' + btnBrand(c) + 'text-decoration:none;display:inline-block;">Открыть УТМ для перевыпуска RSA ↗</a></div>' +
+        '</div>'
+      : '';
+
     // Привязка токена к УТМ — прямая, по серийнику (замена токена; работает и когда
-    // ФСРАР в КЭП не пишется). Показываем ТОЛЬКО для неработающего УТМ (у живого не трогаем).
+    // ФСРАР в КЭП не пишется). Показываем ТОЛЬКО для неработающего УТМ (у живого/rsa не трогаем).
     var rebindBlock = '';
-    if (sel.status !== 'ok') {
+    if (sel.status !== 'ok' && sel.status !== 'rsa') {
       // Карта: серийник -> УТМ, к которому он уже привязан (по живому статусу).
       var boundBy = {};
       ((state.liveStatus && state.liveStatus.instances) || []).forEach(function (i) {
@@ -987,7 +1008,7 @@
         statusPillWide(sel, c) +
         actBtns +
       '</div>' +
-      rebindBlock + callout +
+      rsaHint + rebindBlock + callout +
       '<div style="display:grid;grid-template-columns:' + cols + ';gap:12px;align-items:start;">' +
         '<div style="display:flex;flex-direction:column;gap:12px;min-width:0;">' + nameCard + info + '</div>' +
         '<div style="display:flex;flex-direction:column;gap:12px;min-width:0;">' + portCard + comboCard + '</div>' +

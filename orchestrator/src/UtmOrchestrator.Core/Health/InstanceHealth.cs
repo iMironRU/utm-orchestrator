@@ -12,6 +12,9 @@ public enum HealthVerdict
     Stopped,
     /// <summary>Сбой — см. <see cref="InstanceHealth.Reason"/>.</summary>
     Faulty,
+    /// <summary>Токен сел, ГОСТ читается, но RSA невалиден — типовое состояние после
+    /// перевыпуска КЭП. НЕ поломка: RSA перевыпускается через сам УТМ. Обмен пока невозможен.</summary>
+    NeedRsa,
     /// <summary>Состояние не определено.</summary>
     Unknown,
 }

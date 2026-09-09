@@ -238,10 +238,12 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
     using var http = new UtmHttpClient(TimeSpan.FromSeconds(5));
 
     int ok = 0;
+    int needRsa = 0; // токен сел, ГОСТ ок, но нужен перевыпуск RSA — не «сбой»
     var list = new List<object>();
     foreach (var h in health)
     {
         if (h.IsOk) ok++;
+        else if (h.Verdict == UtmOrchestrator.Core.Health.HealthVerdict.NeedRsa) needRsa++;
 
         // Орг-данные из сертификата (адрес/организация) статичны — берём из кэша по
         // ФСРАР, по HTTP запрашиваем только при промахе и только если УТМ отвечает.
@@ -324,7 +326,8 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
     {
         total = health.Count,
         ok,
-        faulty = health.Count - ok,
+        needRsa,                             // сколько ждут перевыпуска RSA (не сбой)
+        faulty = health.Count - ok - needRsa,
         bringUp = BringUpStatus.Active, // идёт подъём/перепривязка — «не отвечает» это норма
         trayOnline,                          // на связи ли трей (для скана/мастера установки)
         orchestratorVersion = UtmOrchestrator.Core.AppInfo.Version,
