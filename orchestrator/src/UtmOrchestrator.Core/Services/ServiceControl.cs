@@ -121,6 +121,40 @@ public static class ServiceControl
         return WaitFor(sc, ServiceControllerStatus.Stopped, timeout);
     }
 
+    /// <summary>Остановить штатно; если за timeout не остановилась (УТМ иногда подвисает и
+    /// не отвечает на SERVICE_CONTROL_STOP) — принудительно снять процесс службы (taskkill по
+    /// фильтру SERVICES). Работает под LocalSystem (у оркестратора есть права). true, если Stopped.</summary>
+    public static bool StopOrKill(string serviceName, TimeSpan timeout, Action<string>? log = null)
+    {
+        try { if (Stop(serviceName, timeout)) return true; }
+        catch (Exception e) { log?.Invoke($"stop {serviceName}: {e.Message}"); }
+        if (GetState(serviceName) == ServiceState.Stopped) return true;
+
+        log?.Invoke($"{serviceName}: штатно не остановилась — принудительно (taskkill /F по службе)");
+        try
+        {
+            var psi = new ProcessStartInfo("taskkill.exe", $"/F /T /FI \"SERVICES eq {serviceName}\"")
+            {
+                UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true,
+            };
+            using var p = Process.Start(psi)!;
+            string o = p.StandardOutput.ReadToEnd(); string er = p.StandardError.ReadToEnd();
+            p.WaitForExit(20000);
+            if (!string.IsNullOrWhiteSpace(o)) log?.Invoke(o.Trim());
+            if (!string.IsNullOrWhiteSpace(er)) log?.Invoke(er.Trim());
+        }
+        catch (Exception e) { log?.Invoke($"taskkill {serviceName}: {e.Message}"); }
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(25);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (GetState(serviceName) == ServiceState.Stopped) return true;
+            System.Threading.Thread.Sleep(1500);
+        }
+        return GetState(serviceName) == ServiceState.Stopped;
+    }
+
     private static bool WaitFor(ServiceController sc, ServiceControllerStatus target, TimeSpan timeout)
     {
         try

@@ -1226,6 +1226,53 @@ static (string service, string folder, string backupDir, UtmOrchestrator.Core.In
     return (service, folder, backupDir, res);
 }
 
+// Полный откат УТМ на предыдущий билд из бэкапа апдейта. Возвращает состояние ДО апдейта
+// целиком: снять добавленные office/sp jar → очистить spa → вернуть все файлы из бэкапа
+// (jars+конфиг+spa старого билда) → поднять introduce. База/conf экземпляра из бэкапа —
+// это состояние на момент апдейта; transportDB бэкап апдейта НЕ трогал (Apply его не бэкапит),
+// поэтому текущая база сохраняется.
+static bool RollbackUtmFromBackup(string service, Action<string> log)
+{
+    var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var inst = st.Instances.FirstOrDefault(i => string.Equals(i.ServiceName, service, StringComparison.OrdinalIgnoreCase));
+    if (inst is null || string.IsNullOrWhiteSpace(inst.FolderPath) || !Directory.Exists(inst.FolderPath))
+    { log($"rollback {service}: папка УТМ не найдена — пропуск"); return false; }
+    string folder = inst.FolderPath;
+
+    string backupsRoot = Path.Combine(UtmOrchestrator.Core.AppPaths.CacheDir, "utm-update-backups");
+    var backupDir = Directory.Exists(backupsRoot)
+        ? Directory.GetDirectories(backupsRoot, service + "_*").OrderBy(d => d, StringComparer.Ordinal).LastOrDefault()
+        : null;
+    if (backupDir is null) { log($"rollback {service}: нет бэкапа апдейта в {backupsRoot}"); return false; }
+    log($"=== откат {service} из бэкапа {Path.GetFileName(backupDir)} ===");
+
+    // 1) Остановить (штатно или принудительно — УТМ подвисает).
+    UtmOrchestrator.Core.Services.ServiceControl.StopOrKill(service, TimeSpan.FromSeconds(45), log);
+    System.Threading.Thread.Sleep(1500);
+
+    // 2) Снять ДОБАВЛЕННЫЕ новым билдом jar (office-*, sp-*) — иначе рядом со старыми будут дубли.
+    string lib = Path.Combine(folder, "transporter", "lib");
+    if (Directory.Exists(lib))
+        foreach (var j in Directory.GetFiles(lib, "office-*.jar").Concat(Directory.GetFiles(lib, "sp-*.jar")))
+            try { File.Delete(j); log($"снял {Path.GetFileName(j)}"); } catch (Exception e) { log($"не снял {Path.GetFileName(j)}: {e.Message}"); }
+
+    // 3) Очистить spa (УТМ пересоберёт из старых jar; и бэкап вернёт старую spa, если она там есть).
+    string spa = Path.Combine(folder, "transporter", "spa");
+    if (Directory.Exists(spa)) { try { Directory.Delete(spa, true); log("spa очищена"); } catch (Exception e) { log($"spa не очистил: {e.Message}"); } }
+
+    // 4) Вернуть ВСЕ файлы старого билда из бэкапа (jars + конфиг + spa) поверх папки.
+    UtmOrchestrator.Core.Install.UtmUpdater.Restore(folder, backupDir, System.Array.Empty<string>(), log);
+
+    // 5) Поднять через introduce (садит свой токен, сверяет ФСРАР).
+    var target = new BootBringUp.Target(service, inst.Port, inst.TokenSerial ?? "", inst.ExpectedFsrar, inst.ReaderName);
+    var allReaders = st.Instances.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
+    bool up = !string.IsNullOrEmpty(inst.ReaderName)
+        ? BootBringUp.RestartOne(target, allReaders, log)
+        : UtmOrchestrator.Core.Services.ServiceControl.Start(service, TimeSpan.FromSeconds(90));
+    log($"rollback {service}: {(up ? "поднят на старом билде" : "НЕ поднялся — проверьте лог УТМ")}");
+    return up;
+}
+
 // Кто из переданных экземпляров сейчас реально поднят: порт отвечает, RSA ok и (если знаем)
 // ownerId = ожидаемый ФСРАР. Недоступен/чужой ФСРАР = не считаем поднятым.
 static List<string> ProbeHealthy(IEnumerable<UtmInstance> insts, Action<string> log)
@@ -1434,6 +1481,34 @@ app.MapPost("/api/utm/update-all", (NameStore names, OrgInfoCache orgCache) =>
         finally { OpProgress.Finish(); ReaderOp.Gate.Release(); }
     });
     return Results.Accepted(value: new { ok = true, count = services.Count });
+});
+
+// --- Откат УТМ на предыдущий билд из бэкапа апдейта (когда новый билд сломал подпись) ---
+// Полный откат: снять добавленные office/sp jar → очистить spa → вернуть ВСЕ файлы из
+// бэкапа (jars+конфиг+spa старого билда) → поднять introduce. Возвращает УТМ в состояние
+// до апдейта целиком (в отличие от ручной подмены jar, где код и конфиг рассинхронятся).
+app.MapPost("/api/utm/rollback-build", (RestartRequest req, NameStore names, OrgInfoCache orgCache) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    if (string.IsNullOrWhiteSpace(req.Service)) return Results.BadRequest(new { error = "service обязателен" });
+    var stN = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var inst0 = stN.Instances.FirstOrDefault(i => string.Equals(i.ServiceName, req.Service, StringComparison.OrdinalIgnoreCase));
+    string disp = inst0 is null ? req.Service! : (names.Get(inst0.TokenSerial)
+        ?? (!string.IsNullOrEmpty(inst0.ExpectedFsrar) && orgCache.TryGet(inst0.ExpectedFsrar!, out var oi) ? oi.Display : null) ?? req.Service!);
+    if (!ReaderOp.Gate.Wait(0)) return Results.Conflict(new { error = "уже идёт операция — попробуйте позже" });
+    _ = Task.Run(() =>
+    {
+        using var _ = BringUpStatus.Begin();
+        OpProgress.Start($"Откат УТМ · {disp}", 1);
+        try
+        {
+            Action<string> plog = m => { ReaderOp.FileLog(m); OpProgress.Update(0, m.Length > 55 ? m.Substring(0, 55) + "…" : m, disp); };
+            RollbackUtmFromBackup(req.Service!, plog);
+        }
+        catch (Exception e) { ReaderOp.FileLog($"rollback {req.Service}: СБОЙ — {e}"); }
+        finally { OpProgress.Finish(); ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true, service = req.Service });
 });
 
 // --- Полечить токены: рестарт SCardSvr (будит замёрзшие) + introduce-подъём всех ---
