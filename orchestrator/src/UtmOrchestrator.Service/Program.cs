@@ -1226,6 +1226,50 @@ static (string service, string folder, string backupDir, UtmOrchestrator.Core.In
     return (service, folder, backupDir, res);
 }
 
+// Восстановить полную SPA (веб-морду) УТМ из эталона — УТМ с самой полной spa (после отката
+// билда spa могла пересобраться неполной → RequestInfo/рендер в морде дают 500). Копирует spa
+// целиком из эталонного УТМ, перезапускает. transportDB/conf/ключи не трогает.
+static bool SpaRestoreUtm(string service, Action<string> log)
+{
+    var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+    var inst = st.Instances.FirstOrDefault(i => string.Equals(i.ServiceName, service, StringComparison.OrdinalIgnoreCase));
+    if (inst is null || string.IsNullOrWhiteSpace(inst.FolderPath) || !Directory.Exists(inst.FolderPath))
+    { log($"spa-restore {service}: папка УТМ не найдена"); return false; }
+    string spa = Path.Combine(inst.FolderPath, "transporter", "spa");
+    int Count(string d) => Directory.Exists(d) ? Directory.GetFiles(d, "*", SearchOption.AllDirectories).Length : 0;
+    int targetN = Count(spa);
+
+    string? refSpa = null; int refN = targetN;
+    foreach (var o in st.Instances)
+    {
+        if (string.Equals(o.ServiceName, service, StringComparison.OrdinalIgnoreCase) || string.IsNullOrEmpty(o.FolderPath)) continue;
+        var s = Path.Combine(o.FolderPath, "transporter", "spa");
+        int n = Count(s);
+        if (n > refN) { refN = n; refSpa = s; }
+    }
+    if (refSpa is null) { log($"spa-restore {service}: нет эталона полнее текущей spa ({targetN} файлов) — пропуск"); return false; }
+    log($"spa-restore {service}: эталон {refSpa} ({refN}) → текущая ({targetN})");
+
+    UtmOrchestrator.Core.Services.ServiceControl.StopOrKill(service, TimeSpan.FromSeconds(45), log);
+    System.Threading.Thread.Sleep(1500);
+    try { if (Directory.Exists(spa)) Directory.Delete(spa, true); } catch (Exception e) { log($"spa-restore {service}: не удалил старую spa — {e.Message}"); }
+    // рекурсивная копия
+    Directory.CreateDirectory(spa);
+    foreach (var d in Directory.GetDirectories(refSpa, "*", SearchOption.AllDirectories))
+        Directory.CreateDirectory(spa + d.Substring(refSpa.Length));
+    foreach (var f in Directory.GetFiles(refSpa, "*", SearchOption.AllDirectories))
+        try { File.Copy(f, spa + f.Substring(refSpa.Length), true); } catch (Exception e) { log($"spa-restore: {f}: {e.Message}"); }
+    log($"spa-restore {service}: spa заменена ({Count(spa)} файлов)");
+
+    var target = new BootBringUp.Target(service, inst.Port, inst.TokenSerial ?? "", inst.ExpectedFsrar, inst.ReaderName);
+    var allReaders = st.Instances.Select(i => i.ReaderName ?? "").Where(r => r.Length > 0).ToList();
+    bool up = !string.IsNullOrEmpty(inst.ReaderName)
+        ? BootBringUp.RestartOne(target, allReaders, log)
+        : UtmOrchestrator.Core.Services.ServiceControl.Start(service, TimeSpan.FromSeconds(90));
+    log($"spa-restore {service}: {(up ? "поднят с полной spa" : "НЕ поднялся")}");
+    return up;
+}
+
 // ЭКСПЕРИМЕНТ: дать одному УТМ ОТДЕЛЬНУЮ (per-instance) GOST-PKCS11 DLL вместо общей
 // rtPKCS11ECP.dll — гипотеза против интермиттент CKR_TOKEN_NOT_PRESENT при мультизапуске.
 // Копирует текущую GOST-DLL в папку УТМ, правит gost.pkcs11.library.path на копию (с бэкапом
@@ -1549,6 +1593,27 @@ app.MapPost("/api/utm/rollback-build", (RestartRequest req, NameStore names, Org
             RollbackUtmFromBackup(req.Service!, plog);
         }
         catch (Exception e) { ReaderOp.FileLog($"rollback {req.Service}: СБОЙ — {e}"); }
+        finally { OpProgress.Finish(); ReaderOp.Gate.Release(); }
+    });
+    return Results.Accepted(value: new { ok = true, service = req.Service });
+});
+
+// --- Восстановить полную SPA (веб-морду) УТМ из эталона (после отката билда) ---
+app.MapPost("/api/utm/spa-restore", (RestartRequest req) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    if (string.IsNullOrWhiteSpace(req.Service)) return Results.BadRequest(new { error = "service обязателен" });
+    if (!ReaderOp.Gate.Wait(0)) return Results.Conflict(new { error = "уже идёт операция — попробуйте позже" });
+    _ = Task.Run(() =>
+    {
+        using var _ = BringUpStatus.Begin();
+        OpProgress.Start($"Восстановление SPA · {req.Service}", 1);
+        try
+        {
+            Action<string> plog = m => { ReaderOp.FileLog(m); OpProgress.Update(0, m.Length > 55 ? m.Substring(0, 55) + "…" : m, req.Service!); };
+            SpaRestoreUtm(req.Service!, plog);
+        }
+        catch (Exception e) { ReaderOp.FileLog($"spa-restore {req.Service}: СБОЙ — {e}"); }
         finally { OpProgress.Finish(); ReaderOp.Gate.Release(); }
     });
     return Results.Accepted(value: new { ok = true, service = req.Service });
