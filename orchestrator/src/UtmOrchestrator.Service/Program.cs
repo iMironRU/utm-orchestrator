@@ -319,6 +319,19 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
             // Очереди документов: incoming = входящие из ЕГАИС (ждут учётную систему),
             // outgoing = исходящие (поданы, ещё не отправлены в ЕГАИС). -1 = неизвестно.
             queue = !h.IsOk ? null : new { incoming = q.Item1, outgoing = q.Item2 },
+            // Здоровье реальной подписи (по access_log). null, если судить не по чему.
+            // errorClass: Healthy / RsaGostMismatch / CryptoLib / Unknown500. UI по нему
+            // выбирает подсказку/действие (для CryptoLib — «Изолировать GOST»).
+            signing = (h.Signing is null
+                    || h.Signing.ErrorClass == UtmOrchestrator.Core.Diagnostics.SigningErrorClass.NoData)
+                ? null
+                : new
+                {
+                    errorClass = h.Signing.ErrorClass.ToString(),
+                    lastCode = h.Signing.LastCode,
+                    recent500 = h.Signing.Recent500,
+                    recent200 = h.Signing.Recent200,
+                },
         });
     }
 

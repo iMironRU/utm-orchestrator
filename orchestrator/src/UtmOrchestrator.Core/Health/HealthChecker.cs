@@ -28,6 +28,7 @@ public sealed class HealthChecker
         {
             var state = ServiceControl.GetState(inst.ServiceName);
             UtmInfo? info = null;
+            SigningHealth? signing = null;
             HealthVerdict verdict;
             string? reason;
 
@@ -51,17 +52,19 @@ public sealed class HealthChecker
 
                 default: // Running / Other
                     info = inst.Port > 0 ? await http.GetInfoAsync(inst.Port, ct).ConfigureAwait(false) : null;
-                    (verdict, reason) = Evaluate(inst, info);
+                    // Реальная подпись по access_log (ловит сбой, невидимый в /api/info/list).
+                    signing = SigningHealthReader.Read(inst.FolderPath, DateTimeOffset.Now);
+                    (verdict, reason) = Evaluate(inst, info, signing);
                     break;
             }
 
-            result.Add(new InstanceHealth(inst, state, info, verdict, reason));
+            result.Add(new InstanceHealth(inst, state, info, verdict, reason, signing));
         }
 
         return result;
     }
 
-    private static (HealthVerdict, string?) Evaluate(UtmInstance inst, UtmInfo? info)
+    private static (HealthVerdict, string?) Evaluate(UtmInstance inst, UtmInfo? info, SigningHealth? signing)
     {
         if (info is null)
             return (HealthVerdict.Faulty, "не отвечает по HTTP (ещё грузится или завис)");
@@ -85,6 +88,24 @@ public sealed class HealthChecker
 
         if (!info.GostValid)
             return (HealthVerdict.Faulty, "ГОСТ-сертификат недоступен/невалиден");
+
+        // На бумаге всё в порядке (RSA/ГОСТ valid, свой ФСРАР). Но /api/info/list НЕ видит,
+        // реально ли УТМ ПОДПИСЫВАЕТ. Сверяемся с access_log: если свежие POST /opt/in падают —
+        // это ровно тот класс сбоя, что был невидим (рассинхрон RSA↔ГОСТ / крипто-DLL).
+        if (signing is not null && signing.IsBroken)
+        {
+            return signing.ErrorClass switch
+            {
+                // 500/362 «ГОСТ не соответствует RSA» — то же лечение, что и load-time NeedRsa.
+                SigningErrorClass.RsaGostMismatch => (HealthVerdict.NeedRsa,
+                    "подпись падает: RSA не соответствует ГОСТ (перевыпущен КЭП) — перевыпустите RSA"),
+                // 500/89 — контенция общей GOST-DLL / CKR: лечится gost-isolate.
+                SigningErrorClass.CryptoLib => (HealthVerdict.SigningBroken,
+                    "подпись падает: ошибка криптобиблиотеки (CKR) — примените gost-isolate"),
+                _ => (HealthVerdict.SigningBroken,
+                    $"подпись падает: POST /opt/in → {signing.LastCode} (см. access_log / веб УТМ)"),
+            };
+        }
 
         return (HealthVerdict.Ok, null);
     }

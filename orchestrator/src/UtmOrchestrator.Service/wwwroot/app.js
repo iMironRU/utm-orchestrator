@@ -159,6 +159,7 @@
     if (inst.verdict === 'Ok') return 'ok';
     if (inst.verdict === 'NeedRsa') return 'rsa';   // токен сел, ГОСТ ок, нужен перевыпуск RSA — не сбой
     if (inst.verdict === 'Faulty') return 'error';
+    if (inst.verdict === 'SigningBroken') return 'error'; // Running + info ок, но реально не подписывает
     if (inst.verdict === 'Stopped') return 'stopped';
     // Во время подъёма: «запускается сейчас» и «в очереди» — это ход операции, не сбой
     // (различие несёт подпись inst.reason: «Запускается…» / «В очереди»).
@@ -196,6 +197,7 @@
         firewallOpen: inst.firewallOpen === true,
         exchange: inst.exchange || null,   // реальный обмен из лога УТМ
         queue: inst.queue || null,         // входящие/исходящие в очередях УТМ
+        signing: inst.signing || null,     // здоровье подписи по access_log (класс сбоя/коды)
         lastSync: 'только что',
         stoppedAt: 'остановлен',
         progressLabel: inst.reason || 'Идёт операция',
@@ -841,6 +843,26 @@
         '</div>'
       : '';
 
+    // Подсказка о сбое ПОДПИСИ, невидимом в самом УТМ (по access_log). УТМ Running, RSA/ГОСТ
+    // по отдельности valid, но POST /opt/in падают. CryptoLib (CKR/контенция общей GOST-DLL) →
+    // лечится изоляцией GOST-библиотеки. (RsaGostMismatch уже показан выше как «перевыпуск RSA».)
+    var sg = sel.signing;
+    var signingHint = '';
+    if (sg && sg.errorClass === 'CryptoLib') {
+      signingHint = '<div style="display:flex;flex-direction:column;gap:6px;padding:14px;background:' + c.errorBg + ';border:1px solid ' + c.error + ';border-radius:12px;">' +
+          '<div style="font:700 13px system-ui,sans-serif;color:' + c.error + ';">Подпись падает — ошибка криптобиблиотеки</div>' +
+          '<div style="font:12px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">УТМ отвечает и сертификаты на месте, но исходящие не подписываются (POST /opt/in → 500, CKR). Причина — общая GOST-библиотека на несколько УТМ. Лечение и профилактика — <b>изолировать GOST-библиотеку</b> для этого УТМ (своя копия DLL). Перезапустит только этот УТМ (~1 мин).</div>' +
+          '<div><button data-action="gostIsolate" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnBrand(c) + 'border:none;cursor:pointer;">Изолировать GOST</button></div>' +
+        '</div>';
+    } else if (sg && sg.errorClass === 'Unknown500') {
+      signingHint = '<div style="display:flex;flex-direction:column;gap:6px;padding:14px;background:' + c.errorBg + ';border:1px solid ' + c.error + ';border-radius:12px;">' +
+          '<div style="font:700 13px system-ui,sans-serif;color:' + c.error + ';">Подпись падает (HTTP 500)</div>' +
+          '<div style="font:12px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">Исходящие не подписываются (POST /opt/in → 500), причина не распознана по ответу. Откройте веб УТМ и логи УТМ для деталей.</div>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;"><a data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="' + btnBrand(c) + 'text-decoration:none;display:inline-block;">Открыть УТМ ↗</a>' +
+          '<button data-action="openLogsFor" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnGhost(c) + '">Логи УТМ</button></div>' +
+        '</div>';
+    }
+
     // Привязка токена к УТМ — прямая, по серийнику (замена токена; работает и когда
     // ФСРАР в КЭП не пишется). Показываем ТОЛЬКО для неработающего УТМ (у живого/rsa не трогаем).
     var rebindBlock = '';
@@ -912,6 +934,10 @@
       '<button data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="' + btnGhost(c) + '">Открыть УТМ ↗</button>' +
       '<button data-action="openLogsFor" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnGhost(c) + '">Логи УТМ</button>' +
       '<button data-action="queryUnprocessed" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnGhost(c) + '">Запросить накладные</button>' +
+      // Профилактика: изолировать GOST-библиотеку (своя копия DLL) — против интермиттент CKR
+      // при нескольких УТМ на одной машине. Скрываем, когда уже показан реактивный баннер CKR.
+      ((sel.status === 'stopped' || (sel.signing && sel.signing.errorClass === 'CryptoLib')) ? '' :
+        '<button data-action="gostIsolate" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" title="Профилактика CKR: отдельная копия GOST-библиотеки для этого УТМ" style="' + btnGhost(c) + '">Изолировать GOST</button>') +
       (sel.status === 'stopped' ? '' :
         '<button data-action="stopUtm" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="background:transparent;border:1px solid ' + c.error + ';color:' + c.error + ';padding:8px 14px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Остановить</button>') +
       // Показываем ТОЛЬКО если папка УТМ не под нашим корнем (…\utms).
@@ -1008,7 +1034,7 @@
         statusPillWide(sel, c) +
         actBtns +
       '</div>' +
-      rsaHint + rebindBlock + callout +
+      rsaHint + signingHint + rebindBlock + callout +
       '<div style="display:grid;grid-template-columns:' + cols + ';gap:12px;align-items:start;">' +
         '<div style="display:flex;flex-direction:column;gap:12px;min-width:0;">' + nameCard + info + '</div>' +
         '<div style="display:flex;flex-direction:column;gap:12px;min-width:0;">' + portCard + comboCard + '</div>' +
@@ -2570,6 +2596,26 @@
       });
     },
 
+    /* Изолировать GOST-библиотеку для одного УТМ: своя копия DLL (против интермиттент CKR
+       при нескольких УТМ на машине). Правит конфиг + перезапускает только этот УТМ. */
+    gostIsolate: function (el) {
+      var service = el.getAttribute('data-service');
+      var name = el.getAttribute('data-name') || service;
+      if (!service) return;
+      askConfirm({ title: 'Изолировать GOST', okLabel: 'Изолировать', danger: true,
+        message: 'Изолировать GOST-библиотеку для «' + name + '»?\nСоздаётся отдельная копия GOST-DLL для этого УТМ (лечит/предотвращает ошибку криптобиблиотеки при нескольких УТМ). Перезапустится ТОЛЬКО этот УТМ (~1 мин), остальные не затрагиваются.' }, function () {
+        showToast('Изоляция GOST: правка конфига и перезапуск УТМ…');
+        fetch('/api/utm/gost-isolate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ service: service }) })
+          .then(function (r) {
+            if (r.status === 409) { showToast('Уже идёт операция — подождите'); return; }
+            if (!r.ok) throw new Error();
+            showToast('Изоляция GOST запущена — статус обновится автоматически (~1 мин)');
+            pollStatus(true);
+          })
+          .catch(function () { showToast('Не удалось запустить изоляцию GOST'); });
+      });
+    },
+
     /* Перенять управление у 2UTM: adopt из его config + обратимо заглушить. */
     adopt2Utm: function () {
       askConfirm({ title: 'Перенять управление у 2UTM', okLabel: 'Перенять',
@@ -2672,7 +2718,7 @@
   var BUSY_BLOCKED = {
     addAllUtm: 1, addUtm: 1, adopt2Utm: 1, adoptExisting: 1, bindToken: 1,
     bulkExport: 1, bulkStop: 1, bulkCheckDocs: 1, changePort: 1, checkUtmUpd: 1,
-    cleanupFlat: 1, commitImport: 1, confirmDelete: 1, exportUtm: 1, healTokens: 1,
+    cleanupFlat: 1, commitImport: 1, confirmDelete: 1, exportUtm: 1, gostIsolate: 1, healTokens: 1,
     importPicked: 1, queryUnprocessed: 1, queryUnprocessedAll: 1, raiseAll: 1,
     rebindAll: 1, relocateAll: 1, relocateUtm: 1, restore2Utm: 1,
     saveExternalPort: 1, scanTokens: 1, setFirewallNo: 1, setFirewallYes: 1,
