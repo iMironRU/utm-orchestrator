@@ -92,7 +92,7 @@ public sealed class HealthChecker
         // На бумаге всё в порядке (RSA/ГОСТ valid, свой ФСРАР). Но /api/info/list НЕ видит,
         // реально ли УТМ ПОДПИСЫВАЕТ. Сверяемся с access_log: если свежие POST /opt/in падают —
         // это ровно тот класс сбоя, что был невидим (рассинхрон RSA↔ГОСТ / крипто-DLL).
-        if (signing is not null && signing.IsBroken)
+        if (signing is not null && signing.ActivelyBroken)
         {
             return signing.ErrorClass switch
             {
@@ -105,6 +105,14 @@ public sealed class HealthChecker
                 _ => (HealthVerdict.SigningBroken,
                     $"подпись падает: POST /opt/in → {signing.LastCode} (см. access_log / веб УТМ)"),
             };
+        }
+
+        // Последняя подпись была ошибкой, но давно и без подтверждающего успеха → НЕ врём «Работает».
+        // Это чинит ложное «OK» в тихие периоды (старый сбой выпал из окна, свежих попыток нет).
+        if (signing is not null && signing.Unconfirmed)
+        {
+            return (HealthVerdict.SigningUnconfirmed,
+                "подпись не подтверждена: последняя попытка — ошибка, успеха с тех пор не было — проверьте (тест/перевыпуск RSA)");
         }
 
         return (HealthVerdict.Ok, null);

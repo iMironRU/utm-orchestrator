@@ -31,13 +31,22 @@ public sealed record SigningHealth(
     int LastCode,
     int LastSize,
     int Recent200,
-    int Recent500)
+    int Recent500,
+    bool Recent)
 {
     public bool IsBroken => ErrorClass is SigningErrorClass.RsaGostMismatch
         or SigningErrorClass.CryptoLib or SigningErrorClass.Unknown500;
 
+    /// <summary>Сбой АКТИВНЫЙ (последняя попытка — ошибка И она свежая). Отличать от «неподтверждён»:
+    /// последняя попытка была ошибкой, но давно, а успеха с тех пор не было — состояние под вопросом.</summary>
+    public bool ActivelyBroken => IsBroken && Recent;
+
+    /// <summary>Последняя подпись — ошибка, но не свежая, и подтверждающего успеха с тех пор не было.
+    /// Не «Работает» (нельзя утверждать) и не «активный сбой» — «подпись не подтверждена».</summary>
+    public bool Unconfirmed => IsBroken && !Recent;
+
     public static readonly SigningHealth None =
-        new(SigningErrorClass.NoData, null, 0, 0, 0, 0);
+        new(SigningErrorClass.NoData, null, 0, 0, 0, 0, false);
 }
 
 /// <summary>
@@ -58,16 +67,20 @@ public static class SigningHealthReader
     private const int SizeRsaMismatch = 362; // «ГОСТ сертификат не соответствует RSA сертификату…»
     private const int SizeCryptoLib = 89;    // ошибка переинициализации/криптобиблиотеки (CKR)
 
+    // Порог «свежести»: сбой в этом окне — АКТИВНЫЙ; старее — «не подтверждён» (под вопросом).
+    private static readonly TimeSpan RecentWindow = TimeSpan.FromMinutes(30);
+
     /// <summary>
     /// Оценить подпись по access_log УТМ в папке <paramref name="folderPath"/>.
-    /// <paramref name="window"/> — насколько «свежими» должны быть POST, чтобы им верить
-    /// (по умолчанию 30 мин): старый 500, после которого починили и трафика ещё не было,
-    /// НЕ должен вечно светить сбоем. Ошибки чтения → <see cref="SigningHealth.None"/> (не флажим).
+    /// <paramref name="window"/> — окно СКАНИРОВАНИЯ лога (по умолчанию 6 ч): в нём ищем последний
+    /// исход подписи. Последний 200 → «работает»; последний 500 в пределах 30 мин → активный сбой;
+    /// последний 500 старее 30 мин без успеха после → «не подтверждено» (не врём «Работает»).
+    /// Ошибки чтения → <see cref="SigningHealth.None"/> (не флажим).
     /// </summary>
     public static SigningHealth Read(string folderPath, DateTimeOffset now, TimeSpan? window = null,
-        int tailBytes = 256 * 1024)
+        int tailBytes = 512 * 1024)
     {
-        var win = window ?? TimeSpan.FromMinutes(30);
+        var win = window ?? TimeSpan.FromHours(6);
         try
         {
             if (string.IsNullOrWhiteSpace(folderPath)) return SigningHealth.None;
@@ -111,7 +124,8 @@ public static class SigningHealthReader
                     ? Classify(lastSize)
                     : SigningErrorClass.Healthy; // 4xx — не сбой подписи (напр. валидация документа)
 
-            return new SigningHealth(cls, lastTs, lastCode, lastSize, n200, n500);
+            bool recent = (now - lastTs.Value) <= RecentWindow;
+            return new SigningHealth(cls, lastTs, lastCode, lastSize, n200, n500, recent);
         }
         catch
         {

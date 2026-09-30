@@ -239,11 +239,13 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
 
     int ok = 0;
     int needRsa = 0; // токен сел, ГОСТ ок, но нужен перевыпуск RSA — не «сбой»
+    int unconfirmed = 0; // подпись не подтверждена (последняя — ошибка, но давно) — «внимание», не «сбой»
     var list = new List<object>();
     foreach (var h in health)
     {
         if (h.IsOk) ok++;
         else if (h.Verdict == UtmOrchestrator.Core.Health.HealthVerdict.NeedRsa) needRsa++;
+        else if (h.Verdict == UtmOrchestrator.Core.Health.HealthVerdict.SigningUnconfirmed) unconfirmed++;
 
         // Орг-данные из сертификата (адрес/организация) статичны — берём из кэша по
         // ФСРАР, по HTTP запрашиваем только при промахе и только если УТМ отвечает.
@@ -331,6 +333,7 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
                     lastCode = h.Signing.LastCode,
                     recent500 = h.Signing.Recent500,
                     recent200 = h.Signing.Recent200,
+                    recent = h.Signing.Recent,   // сбой свежий (активный) vs старый (не подтверждён)
                 },
         });
     }
@@ -340,7 +343,8 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
         total = health.Count,
         ok,
         needRsa,                             // сколько ждут перевыпуска RSA (не сбой)
-        faulty = health.Count - ok - needRsa,
+        unconfirmed,                         // подпись не подтверждена (внимание, не сбой)
+        faulty = health.Count - ok - needRsa - unconfirmed,
         bringUp = BringUpStatus.Active, // идёт подъём/перепривязка — «не отвечает» это норма
         trayOnline,                          // на связи ли трей (для скана/мастера установки)
         orchestratorVersion = UtmOrchestrator.Core.AppInfo.Version,
@@ -1760,33 +1764,64 @@ app.MapPost("/api/service/uninstall", (UninstallRequest req) =>
     if (req?.Confirm != true) return Results.BadRequest(new { error = "нужно подтверждение (confirm=true)" });
     try
     {
-        string appDir = AppContext.BaseDirectory.TrimEnd('\\');
+        // Корень установки (C:\UtmOrchestrator = bin+data+utms+cache+transfer) — сносим ЦЕЛИКОМ,
+        // а не только bin\app. Плюс собираем УТМ-папки ВНЕ корня (adopted), чтобы удалить и их.
+        string root = Path.GetFullPath(UtmOrchestrator.Core.AppPaths.Root).TrimEnd('\\');
+        var extraFolders = new List<string>();
+        try
+        {
+            var st = OrchestratorState.Load(OrchestratorState.DefaultPath);
+            foreach (var i in st.Instances)
+            {
+                if (string.IsNullOrWhiteSpace(i.FolderPath)) continue;
+                string full = Path.GetFullPath(i.FolderPath).TrimEnd('\\');
+                if (!full.Equals(root, StringComparison.OrdinalIgnoreCase)
+                    && !full.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase))
+                    extraFolders.Add(full);
+            }
+        }
+        catch { /* нет state — удалим хотя бы корень */ }
+        string extraPs = extraFolders.Count == 0
+            ? "@()"
+            : "@(" + string.Join(",", extraFolders.Select(f => "'" + f.Replace("'", "''") + "'")) + ")";
+
         string ps1 = Path.Combine(Path.GetTempPath(), $"utmo-uninstall-{Guid.NewGuid():N}.ps1");
-        // Скрипт запускается ВНЕ C:\UtmOrchestrator, поэтому может удалить и её после стопа службы.
+        // Скрипт запускается ВНЕ корня (cwd=%TEMP%), поэтому может удалить и сам корень после стопа службы.
         string script = """
 $ErrorActionPreference='SilentlyContinue'
+Set-Location $env:TEMP
 Start-Sleep 2
+$root='__ROOT__'
+$extra=__EXTRA__
+# 1. стоп служб УТМ + их процессы, затем удаление служб
 foreach($s in Get-Service Transport* ){ & sc.exe stop $s.Name | Out-Null }
 Start-Sleep 2
-Get-Process utm | Stop-Process -Force
+Get-Process utm -EA SilentlyContinue | Stop-Process -Force
 foreach($s in Get-Service Transport* ){ & sc.exe delete $s.Name | Out-Null }
+# 2. стоп + удаление самого оркестратора
 & sc.exe stop UtmOrchestrator | Out-Null
 Start-Sleep 2
 & sc.exe delete UtmOrchestrator | Out-Null
-Get-Process *UtmOrchestrator* | Stop-Process -Force
+Get-Process *UtmOrchestrator* -EA SilentlyContinue | Stop-Process -Force
+# процессы, ЗАПУЩЕННЫЕ ИЗ КОРНЯ (dotnet-хост службы, procrun УТМ) — иначе файлы залочены
+Get-CimInstance Win32_Process | ? { $_.ExecutablePath -and $_.ExecutablePath -like "$root\*" } | % { Stop-Process -Id $_.ProcessId -Force }
+Start-Sleep 1
+# 3. автозапуск / расписания / правила брандмауэра
 Get-ScheduledTask | ? { $_.TaskName -match 'Utm|Orchestrator' } | Unregister-ScheduledTask -Confirm:$false
 foreach($h in 'HKCU:','HKLM:'){ $rk="$h\Software\Microsoft\Windows\CurrentVersion\Run"; $it=Get-Item $rk -EA SilentlyContinue; if($it){ $it.Property | ? { $_ -match 'Utm|Orchestrator' } | % { Remove-ItemProperty $rk -Name $_ } } }
 Get-NetFirewallRule | ? { $_.DisplayName -like 'UTM-Orchestrator-*' } | Remove-NetFirewallRule
-foreach($f in @(Get-ChildItem 'C:\' -Directory | ? { $_.Name -match '^(UTM|UTM_\d+)$' })){ [System.IO.Directory]::Delete($f.FullName,$true) }
-Start-Sleep 1
-[System.IO.Directory]::Delete('__APPDIR__',$true)
+# 4. УТМ-папки ВНЕ корня (adopted) + легаси C:\UTM / C:\UTM_N
+foreach($f in $extra){ if($f -and (Test-Path $f)){ [System.IO.Directory]::Delete($f,$true) } }
+foreach($f in @(Get-ChildItem 'C:\' -Directory -EA SilentlyContinue | ? { $_.Name -match '^(UTM|UTM_\d+)$' })){ [System.IO.Directory]::Delete($f.FullName,$true) }
+# 5. ВЕСЬ корень установки (bin+data+utms+cache+transfer) — с ретраем на залоченные файлы
+for($i=0; $i -lt 12 -and (Test-Path $root); $i++){ try { [System.IO.Directory]::Delete($root,$true) } catch { Start-Sleep 1 } }
 """;
-        script = script.Replace("__APPDIR__", appDir.Replace("'", "''"));
+        script = script.Replace("__ROOT__", root.Replace("'", "''")).Replace("__EXTRA__", extraPs);
         File.WriteAllText(ps1, script, System.Text.Encoding.UTF8);
-        ReaderOp.FileLog($"=== ДЕИНСТАЛЛЯЦИЯ запрошена — запускаю {ps1} (снесёт УТМ + оркестратор) ===");
+        ReaderOp.FileLog($"=== ДЕИНСТАЛЛЯЦИЯ запрошена — запускаю {ps1} (снесёт УТМ + весь корень {root}) ===");
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(
             "powershell.exe", $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{ps1}\"")
-        { UseShellExecute = false, CreateNoWindow = true });
+        { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Path.GetTempPath() });
     }
     catch (Exception e) { return Results.Problem("не удалось запустить деинсталляцию: " + e.Message); }
     return Results.Accepted(value: new { ok = true });

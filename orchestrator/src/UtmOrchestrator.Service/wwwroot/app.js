@@ -160,6 +160,7 @@
     if (inst.verdict === 'NeedRsa') return 'rsa';   // токен сел, ГОСТ ок, нужен перевыпуск RSA — не сбой
     if (inst.verdict === 'Faulty') return 'error';
     if (inst.verdict === 'SigningBroken') return 'error'; // Running + info ок, но реально не подписывает
+    if (inst.verdict === 'SigningUnconfirmed') return 'warn'; // подпись не подтверждена — внимание, не сбой
     if (inst.verdict === 'Stopped') return 'stopped';
     // Во время подъёма: «запускается сейчас» и «в очереди» — это ход операции, не сбой
     // (различие несёт подпись inst.reason: «Запускается…» / «В очереди»).
@@ -254,6 +255,7 @@
       reasonText: u.reason || '', exchangeText: exchangeText, primaryLabel: primaryLabel,
       exchange: u.exchange || null, exchangeLive: !!(u.exchange && u.exchange.live),
       queue: u.queue || null,
+      signing: u.signing || null,
       line1: line1, line2: line2,
       progressLabel: u.progressLabel || '', progress: u.progress || 0, progressTrack: c.subtleBg,
     };
@@ -787,7 +789,12 @@
     var isMobile = state.isMobile;
     var infoCols = isMobile ? '1fr' : 'repeat(2,1fr)';
 
-    var callout = sel.hasCallout
+    // Развёрнутая карточка-подсказка (rsaHint/signingHint ниже) полностью объясняет проблему —
+    // тогда тонкий однострочный callout не дублируем.
+    var sgBroken = sel.signing && (sel.signing.errorClass === 'CryptoLib'
+      || sel.signing.errorClass === 'Unknown500' || sel.signing.errorClass === 'RsaGostMismatch');
+    var hasRichHint = sel.status === 'rsa' || sgBroken;
+    var callout = (sel.hasCallout && !hasRichHint)
       ? '<div style="display:flex;align-items:flex-start;gap:8px;padding:12px 14px;background:' + sel.statusBg + ';border-radius:9px;">' +
           '<div style="width:6px;height:6px;border-radius:50%;background:' + sel.statusColor + ';margin-top:6px;flex-shrink:0;"></div>' +
           '<div style="font:13px/1.5 system-ui,sans-serif;color:' + sel.statusColor + ';">' + esc(sel.reasonText) + '</div></div>'
@@ -833,34 +840,73 @@
       infoCell('Токен', sel.tokenDisplay, true) +
     '</div>';
 
-    // Подсказка про перевыпуск RSA (после планового перевыпуска КЭП). Токен привязан
-    // правильно (ГОСТ читается) — нужен только перевыпуск RSA через сам УТМ.
+    // Развёрнутая карточка диагностики: заголовок (что) → описание → тех.причина (моно) →
+    // «Как решить» (пронумерованные шаги) → кнопки-действия. Используется для всех ошибок.
+    function diagCard(color, bg, title, what, why, steps, actions) {
+      var stepsHtml = (steps && steps.length)
+        ? '<div style="font:600 12px system-ui,sans-serif;color:' + c.textPrimary + ';margin-top:2px;">Как решить:</div>' +
+          '<ol style="margin:2px 0 0;padding-left:18px;font:12px/1.7 system-ui,sans-serif;color:' + c.textSecondary + ';">' +
+          steps.map(function (s) { return '<li>' + s + '</li>'; }).join('') + '</ol>'
+        : '';
+      return '<div style="display:flex;flex-direction:column;gap:7px;padding:14px;background:' + bg + ';border:1px solid ' + color + ';border-radius:12px;">' +
+          '<div style="font:700 13px system-ui,sans-serif;color:' + color + ';">' + title + '</div>' +
+          (what ? '<div style="font:12px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">' + what + '</div>' : '') +
+          (why ? '<div style="font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;color:' + c.textTertiary + ';background:' + c.subtleBg + ';padding:6px 8px;border-radius:6px;overflow-x:auto;">' + why + '</div>' : '') +
+          stepsHtml +
+          (actions ? '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:3px;">' + actions + '</div>' : '') +
+        '</div>';
+    }
+
+    // Нужен перевыпуск RSA (после перевыпуска КЭП / переустановки токена): токен свой, ГОСТ
+    // читается, но RSA невалиден. Лечится перевыпуском RSA через сам УТМ.
     var rsaHint = sel.status === 'rsa'
-      ? '<div style="display:flex;flex-direction:column;gap:6px;padding:14px;background:' + c.warnBg + ';border:1px solid ' + c.warn + ';border-radius:12px;">' +
-          '<div style="font:700 13px system-ui,sans-serif;color:' + c.warn + ';">Нужен перевыпуск RSA</div>' +
-          '<div style="font:12px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">КЭП перевыпущен — старый RSA-сертификат стал невалиден. Токен привязан верно (ГОСТ читается). Откройте веб-интерфейс УТМ по адресу выше и перевыпустите RSA — после этого обмен восстановится сам.</div>' +
-          '<div><a data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="' + btnBrand(c) + 'text-decoration:none;display:inline-block;">Открыть УТМ для перевыпуска RSA ↗</a></div>' +
-        '</div>'
+      ? diagCard(c.warn, c.warnBg, 'Нужен перевыпуск RSA',
+          'Токен привязан верно и ГОСТ-сертификат читается, но RSA-сертификат невалиден — типовое состояние после перевыпуска КЭП или переустановки токена. Обмен с ЕГАИС приостановлен, пока RSA не перевыпущен. Это не поломка.',
+          'verdict = NeedRsa · ' + esc(sel.reasonText || 'RSA невалиден'),
+          ['Откройте веб-интерфейс УТМ (кнопка ниже).',
+           'На главной странице УТМ нажмите перевыпуск RSA-сертификата и введите PIN токена.',
+           'УТМ подпишет запрос ГОСТ-ключом и получит новый RSA от ЕГАИС — обмен восстановится сам, статус вернётся в «Работает».'],
+          '<a data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="' + btnBrand(c) + 'text-decoration:none;display:inline-block;">Открыть УТМ для перевыпуска RSA ↗</a>')
       : '';
 
-    // Подсказка о сбое ПОДПИСИ, невидимом в самом УТМ (по access_log). УТМ Running, RSA/ГОСТ
-    // по отдельности valid, но POST /opt/in падают. CryptoLib (CKR/контенция общей GOST-DLL) →
-    // лечится изоляцией GOST-библиотеки. (RsaGostMismatch уже показан выше как «перевыпуск RSA».)
+    // Сбой ПОДПИСИ, невидимый в самом УТМ (по access_log): УТМ Running, сертификаты числятся
+    // valid, но POST /opt/in → 500. Разворачиваем полную лестницу решений.
     var sg = sel.signing;
     var signingHint = '';
-    if (sg && sg.errorClass === 'CryptoLib') {
-      signingHint = '<div style="display:flex;flex-direction:column;gap:6px;padding:14px;background:' + c.errorBg + ';border:1px solid ' + c.error + ';border-radius:12px;">' +
-          '<div style="font:700 13px system-ui,sans-serif;color:' + c.error + ';">Подпись падает — ошибка криптобиблиотеки</div>' +
-          '<div style="font:12px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">УТМ отвечает и сертификаты на месте, но исходящие не подписываются (POST /opt/in → 500, CKR). Причина — общая GOST-библиотека на несколько УТМ. Лечение и профилактика — <b>изолировать GOST-библиотеку</b> для этого УТМ (своя копия DLL). Перезапустит только этот УТМ (~1 мин).</div>' +
-          '<div><button data-action="gostIsolate" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnBrand(c) + 'border:none;cursor:pointer;">Изолировать GOST</button></div>' +
-        '</div>';
-    } else if (sg && sg.errorClass === 'Unknown500') {
-      signingHint = '<div style="display:flex;flex-direction:column;gap:6px;padding:14px;background:' + c.errorBg + ';border:1px solid ' + c.error + ';border-radius:12px;">' +
-          '<div style="font:700 13px system-ui,sans-serif;color:' + c.error + ';">Подпись падает (HTTP 500)</div>' +
-          '<div style="font:12px/1.6 system-ui,sans-serif;color:' + c.textSecondary + ';">Исходящие не подписываются (POST /opt/in → 500), причина не распознана по ответу. Откройте веб УТМ и логи УТМ для деталей.</div>' +
-          '<div style="display:flex;gap:8px;flex-wrap:wrap;"><a data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="' + btnBrand(c) + 'text-decoration:none;display:inline-block;">Открыть УТМ ↗</a>' +
-          '<button data-action="openLogsFor" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnGhost(c) + '">Логи УТМ</button></div>' +
-        '</div>';
+    if (sg && sg.recent === true && sg.errorClass === 'CryptoLib') {
+      signingHint = diagCard(c.error, c.errorBg, 'Подпись не проходит — ошибка криптобиблиотеки (CKR)',
+        'УТМ отвечает по сети и сертификаты числятся валидными, но исходящие документы НЕ подписываются (POST /opt/in → 500). Обмен с ЕГАИС по этому УТМ стоит: акты и запросы не уходят. Причина — крипто-библиотека/токен, а не сеть.',
+        'errorClass=CryptoLib · последний код ' + (sg.lastCode || 500) + ' · свежих отказов ' + (sg.recent500 || 0) + ' / успехов ' + (sg.recent200 || 0) + '. В логе УТМ обычно: CKR_TOKEN_NOT_PRESENT / «Ошибка переинициализации криптобиблиотеки».',
+        ['<b>Изолировать GOST</b> — если на машине несколько УТМ делят одну GOST-библиотеку, под нагрузкой возникает контенция. Кнопка даёт этому УТМ свою копию DLL (перезапуск только его, ~1 мин).',
+         '<b>Полечить токены</b> — если DLL уже изолирована: перезапуск службы смарт-карт будит залипшую сессию токена (прервёт обмен всех УТМ на ~1–2 мин).',
+         'Если не помогло и в логе <b>CKR_TOKEN_NOT_PRESENT</b> — токен отвалился физически: <b>переткнуть Rutoken</b> этого УТМ (лучше в другой USB-порт напрямую, не через хаб).',
+         'После перетыкания УТМ часто просит перевыпуск RSA (сессия сброшена) — перевыпустите RSA через веб УТМ.',
+         'Проверка: обмен по УТМ должен пойти с кодом 200, статус вернётся в «Работает».'],
+        '<button data-action="gostIsolate" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnBrand(c) + 'border:none;cursor:pointer;">Изолировать GOST</button>' +
+        '<button data-action="healTokens" style="' + btnGhost(c) + '">Полечить токены</button>' +
+        '<a data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="' + btnGhost(c) + 'text-decoration:none;display:inline-block;">Открыть УТМ ↗</a>' +
+        '<button data-action="openLogsFor" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnGhost(c) + '">Логи УТМ</button>');
+    } else if (sg && sg.recent === true && sg.errorClass === 'Unknown500') {
+      signingHint = diagCard(c.error, c.errorBg, 'Подпись не проходит (HTTP 500)',
+        'Исходящие документы не подписываются (POST /opt/in → 500), но точную причину по ответу распознать не удалось.',
+        'errorClass=Unknown500 · последний код ' + (sg.lastCode || 500) + ' · свежих отказов ' + (sg.recent500 || 0) + '.',
+        ['Откройте логи УТМ и найдите строку ошибки подписи (CKR_*, RSA, «Не удалось подписать»).',
+         'Откройте веб-интерфейс УТМ — там часто написано, что требуется (например, перевыпуск RSA).',
+         'Если в логе <b>CKR_TOKEN_NOT_PRESENT</b> — действуйте по сценарию «ошибка криптобиблиотеки»: изоляция GOST → лечение токенов → переткнуть токен.'],
+        '<a data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="' + btnBrand(c) + 'text-decoration:none;display:inline-block;">Открыть УТМ ↗</a>' +
+        '<button data-action="openLogsFor" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnGhost(c) + '">Логи УТМ</button>');
+    } else if (sgBroken && sg && sg.recent === false) {
+      // Последняя подпись — ошибка, но давно, и подтверждающего успеха не было. НЕ утверждаем «Работает».
+      var clsRu = sg.errorClass === 'RsaGostMismatch' ? 'RSA не соответствует ГОСТ'
+                : sg.errorClass === 'CryptoLib' ? 'ошибка криптобиблиотеки (CKR)' : 'HTTP 500';
+      signingHint = diagCard(c.warn, c.warnBg, 'Подпись не подтверждена',
+        'Последняя попытка подписи была ошибкой, но давно, а успешной подписи с тех пор не было. Утверждать «Работает» нельзя — возможно, УТМ всё ещё не подписывает. Это та ловушка, из-за которой раньше УТМ ложно казался рабочим в тихий период: старый сбой пропадал из окна, свежих попыток не было.',
+        'последний исход: ' + clsRu + ' · код ' + (sg.lastCode || 500) + ' · успехов в окне ' + (sg.recent200 || 0) + ' (свежих попыток нет → не подтверждено)',
+        ['Прогоните тест подписи (или дождитесь ближайшего документа от учётки) — это снимет неопределённость.',
+         'Если результат 200 — статус сам станет «Работает».',
+         'Если 500 — чините по классу: <b>RSA↔ГОСТ</b> → перезапуск УТМ + перевыпуск RSA; <b>CKR</b> → изолировать GOST / переткнуть токен.'],
+        '<a data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="' + btnBrand(c) + 'text-decoration:none;display:inline-block;">Открыть УТМ ↗</a>' +
+        '<button data-action="openLogsFor" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnGhost(c) + '">Логи УТМ</button>');
     }
 
     // Привязка токена к УТМ — прямая, по серийнику (замена токена; работает и когда
@@ -2147,7 +2193,7 @@
     setDark: function () { try { localStorage.setItem('utm.theme', 'dark'); } catch (e) {} setState({ theme: 'dark' }); },
     setLight: function () { try { localStorage.setItem('utm.theme', 'light'); } catch (e) {} setState({ theme: 'light' }); },
     toggleMobileNav: function () { setState({ mobileNavOpen: !state.mobileNavOpen }); },
-    toggleNotif: function () { setState({ notifOpen: !state.notifOpen, unreadCount: 0 }); },
+    toggleNotif: function () { askNotifyPermission(); setState({ notifOpen: !state.notifOpen, unreadCount: 0 }); },
 
     /* вход — серверная проверка логина/пароля, кука сеанса */
     login: function (el) {
@@ -2813,6 +2859,33 @@
      службу в голодание пула потоков (синхронные вызовы ServiceController). */
   var pollInFlight = false;
   var lastBusy = false; // была ли операция активна в прошлом опросе (чтобы снять спиннер по завершении)
+  // Пуш-уведомления о сбоях: помним, о какой проблеме по каждому УТМ уже уведомили
+  // (service → verdict), чтобы стрелять только на НОВЫЕ (появление/смена вердикта), а не каждый опрос.
+  var notifiedProblems = {};
+  function askNotifyPermission() {
+    try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission(); } catch (e) {}
+  }
+  function notifyProblems(d) {
+    if (!d || !d.instances) return;
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') { notifiedProblems = {}; return; }
+    var seen = {};
+    d.instances.forEach(function (inst) {
+      var st = mapStatus(inst);
+      if (st === 'error' || st === 'warn' || st === 'rsa') {
+        seen[inst.service] = inst.verdict;
+        if (notifiedProblems[inst.service] !== inst.verdict) {   // новая проблема или сменился вердикт
+          var name = inst.title || inst.service || ('порт ' + inst.port);
+          var body = inst.reason || (st === 'rsa' ? 'нужен перевыпуск RSA' : st === 'error' ? 'сбой подписи/обмена' : 'требует внимания');
+          try {
+            var n = new Notification('УТМ «' + name + '»', { body: body, tag: 'utm-' + inst.service, renotify: true });
+            n.onclick = function () { try { window.focus(); } catch (e) {} };
+          } catch (e) {}
+        }
+      }
+    });
+    notifiedProblems = seen;   // УТМ, вернувшиеся в OK, забываются → при повторном сбое уведомим снова
+  }
+
   function pollStatus(force) {
     if (pollInFlight && !force) return;
     pollInFlight = true;
@@ -2831,6 +2904,7 @@
       .then(function (d) {
         if (state.needLogin) setState({ needLogin: false, authed: true }); // куки уже валидны
         state.liveStatus = d;
+        notifyProblems(d);   // пуш о новых сбоях (если разрешены)
         state.liveError = false;
         state.lastCheck = new Date().toLocaleTimeString('ru-RU');
         // Перерисовать, если экран «живой» ЛИБО идёт операция (спиннер должен обновляться на
@@ -2863,6 +2937,7 @@
     bindEvents();
     render();
 
+    askNotifyPermission();   // спросить разрешение на пуш о сбоях (если ещё не решено)
     pollStatus();
     setInterval(pollStatus, 8000);
   }
