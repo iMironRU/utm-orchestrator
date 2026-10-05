@@ -112,6 +112,20 @@ public sealed class UtmHttpClient : IDisposable
         return new UtmOrgInfo(organization, inn, personName, address);
     }
 
+    /// <summary>Детерминированный детектор рассинхрона RSA↔ГОСТ. Возвращает:
+    /// <c>RsaBoundGost</c> — отпечаток ГОСТ, под который сгенерирован ТЕКУЩИЙ RSA
+    /// (<c>/api/rsa/orginfo</c> → <c>gostFingerprint</c>); <c>CurrentGost</c> — отпечаток ГОСТ,
+    /// который на токене СЕЙЧАС (<c>/api/gost/orginfo</c> → <c>fingerprint</c>). Разные = «ГОСТ не
+    /// соответствует RSA». null-поле = УТМ не ответил по этому эндпоинту.</summary>
+    public async Task<(string? RsaBoundGost, string? CurrentGost)> GetRsaGostFingerprintsAsync(int port, CancellationToken ct = default)
+    {
+        JsonElement? rsa = await TryGetJsonAsync($"http://{Host}:{port}/api/rsa/orginfo", ct).ConfigureAwait(false);
+        JsonElement? gost = await TryGetJsonAsync($"http://{Host}:{port}/api/gost/orginfo", ct).ConfigureAwait(false);
+        string? rsaFp = rsa is { } r ? GetString(r, "gostFingerprint") : null;
+        string? gostFp = gost is { } g ? GetString(g, "fingerprint") : null;
+        return (rsaFp, gostFp);
+    }
+
     private async Task<JsonElement?> TryGetJsonAsync(string url, CancellationToken ct)
     {
         try

@@ -29,6 +29,7 @@ public sealed class HealthChecker
             var state = ServiceControl.GetState(inst.ServiceName);
             UtmInfo? info = null;
             SigningHealth? signing = null;
+            string? rsaBoundGost = null, currentGost = null;
             HealthVerdict verdict;
             string? reason;
 
@@ -54,17 +55,21 @@ public sealed class HealthChecker
                     info = inst.Port > 0 ? await http.GetInfoAsync(inst.Port, ct).ConfigureAwait(false) : null;
                     // Реальная подпись по access_log (ловит сбой, невидимый в /api/info/list).
                     signing = SigningHealthReader.Read(inst.FolderPath, DateTimeOffset.Now);
-                    (verdict, reason) = Evaluate(inst, info, signing);
+                    // Детерминированный детектор рассинхрона RSA↔ГОСТ по отпечаткам (точнее эвристики по 500).
+                    if (inst.Port > 0 && info is not null)
+                        (rsaBoundGost, currentGost) = await RsaGostCache.GetAsync(http, inst.Port, ct).ConfigureAwait(false);
+                    (verdict, reason) = Evaluate(inst, info, signing, rsaBoundGost, currentGost);
                     break;
             }
 
-            result.Add(new InstanceHealth(inst, state, info, verdict, reason, signing));
+            result.Add(new InstanceHealth(inst, state, info, verdict, reason, signing, rsaBoundGost, currentGost));
         }
 
         return result;
     }
 
-    private static (HealthVerdict, string?) Evaluate(UtmInstance inst, UtmInfo? info, SigningHealth? signing)
+    private static (HealthVerdict, string?) Evaluate(UtmInstance inst, UtmInfo? info, SigningHealth? signing,
+        string? rsaBoundGost = null, string? currentGost = null)
     {
         if (info is null)
             return (HealthVerdict.Faulty, "не отвечает по HTTP (ещё грузится или завис)");
@@ -89,9 +94,20 @@ public sealed class HealthChecker
         if (!info.GostValid)
             return (HealthVerdict.Faulty, "ГОСТ-сертификат недоступен/невалиден");
 
-        // На бумаге всё в порядке (RSA/ГОСТ valid, свой ФСРАР). Но /api/info/list НЕ видит,
+        // ДЕТЕРМИНИРОВАННЫЙ детектор рассинхрона RSA↔ГОСТ по отпечаткам (точнее эвристики по 500 в логе):
+        // RSA сгенерирован под один ГОСТ-отпечаток, а на токене сейчас другой ⇒ «ГОСТ не соответствует RSA».
+        // Частый случай — кросс-привязка: RSA перевыпустили в момент тряски токенов и он привязался к ГОСТ соседа.
+        if (!string.IsNullOrEmpty(rsaBoundGost) && !string.IsNullOrEmpty(currentGost)
+            && !string.Equals(rsaBoundGost, currentGost, StringComparison.OrdinalIgnoreCase))
+        {
+            static string Sh(string fp) => fp.Length > 8 ? fp[..8] : fp;
+            return (HealthVerdict.NeedRsa,
+                $"RSA привязан к другому ГОСТ (RSA→{Sh(rsaBoundGost!)} ≠ токен {Sh(currentGost!)}) — перевыпустите RSA на стабильном парке");
+        }
+
+        // На бумаге всё в порядке (RSA/ГОСТ valid, свой ФСРАР, отпечатки совпали). Но /api/info/list НЕ видит,
         // реально ли УТМ ПОДПИСЫВАЕТ. Сверяемся с access_log: если свежие POST /opt/in падают —
-        // это ровно тот класс сбоя, что был невидим (рассинхрон RSA↔ГОСТ / крипто-DLL).
+        // это ровно тот класс сбоя, что был невидим (крипто-DLL/CKR и т.п.).
         if (signing is not null && signing.ActivelyBroken)
         {
             return signing.ErrorClass switch

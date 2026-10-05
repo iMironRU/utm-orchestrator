@@ -36,7 +36,9 @@ public sealed record InstanceHealth(
     UtmInfo? Info,
     HealthVerdict Verdict,
     string? Reason,
-    SigningHealth? Signing = null)
+    SigningHealth? Signing = null,
+    string? RsaBoundGost = null,   // отпечаток ГОСТ, под который сгенерирован текущий RSA
+    string? CurrentGost = null)    // отпечаток ГОСТ, который на токене сейчас (разные = рассинхрон)
 {
     public bool IsOk => Verdict == HealthVerdict.Ok;
 }

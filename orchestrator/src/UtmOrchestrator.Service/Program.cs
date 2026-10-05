@@ -335,6 +335,9 @@ app.MapGet("/api/status", async (NameStore names, SerialCache serials, OrgInfoCa
                     recent200 = h.Signing.Recent200,
                     recent = h.Signing.Recent,   // сбой свежий (активный) vs старый (не подтверждён)
                 },
+            // Отпечатки для детерминированного детектора рассинхрона RSA↔ГОСТ (разные = «не соответствует»).
+            rsaBoundGost = h.RsaBoundGost,   // ГОСТ, под который сгенерирован RSA
+            currentGost = h.CurrentGost,     // ГОСТ, который на токене сейчас
         });
     }
 
