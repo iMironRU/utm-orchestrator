@@ -56,7 +56,12 @@ public sealed class EmailAlertChannel : IAlertChannel
             foreach (var to in _s.To.Where(t => !string.IsNullOrWhiteSpace(t)))
                 mime.To.Add(MailboxAddress.Parse(to.Trim()));
             mime.Subject = msg.Title;
-            mime.Body = new TextPart("plain") { Text = msg.Body };
+            // multipart/alternative: HTML-карточка + plain-text для клиентов без HTML
+            mime.Body = new BodyBuilder
+            {
+                TextBody = EmailHtml.RenderText(msg),
+                HtmlBody = EmailHtml.Render(msg),
+            }.ToMessageBody();
 
             using var client = new SmtpClient();
             var secure = _s.UseSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls;

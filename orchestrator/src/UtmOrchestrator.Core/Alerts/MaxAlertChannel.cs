@@ -53,7 +53,7 @@ public sealed class MaxAlertChannel : IAlertChannel
             using var h = new HttpClient(new SocketsHttpHandler { UseProxy = false })
             { Timeout = TimeSpan.FromSeconds(15) };
 
-            string text = (msg.Title + "\n\n" + msg.Body).Replace("\"", "\\\"").Replace("\n", "\\n");
+            string text = EmailHtml.RenderText(msg).Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n");
             var json = new StringContent($"{{\"text\":\"{text}\"}}", Encoding.UTF8, "application/json");
             string url = $"https://botapi.max.ru/messages?access_token={Uri.EscapeDataString(token)}&chat_id={Uri.EscapeDataString(_s.ChatId!)}";
             var resp = await h.PostAsync(url, json, ct).ConfigureAwait(false);

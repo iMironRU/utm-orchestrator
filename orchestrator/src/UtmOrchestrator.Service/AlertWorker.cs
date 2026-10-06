@@ -1,6 +1,7 @@
 using UtmOrchestrator.Core.Alerts;
 using UtmOrchestrator.Core.Discovery;
 using UtmOrchestrator.Core.Health;
+using UtmOrchestrator.Core.State;
 
 namespace UtmOrchestrator.Service;
 
@@ -13,12 +14,14 @@ namespace UtmOrchestrator.Service;
 public sealed class AlertWorker : BackgroundService
 {
     private readonly ILogger<AlertWorker> _log;
+    private readonly NameStore _names;
     private readonly TimeSpan _interval;
     private readonly Dictionary<string, (HealthVerdict Verdict, DateTime LastAlertUtc)> _state = new();
 
-    public AlertWorker(ILogger<AlertWorker> log, IConfiguration config)
+    public AlertWorker(ILogger<AlertWorker> log, IConfiguration config, NameStore names)
     {
         _log = log;
+        _names = names;
         int sec = config.GetValue("AlertCheckIntervalSeconds", 60);
         _interval = TimeSpan.FromSeconds(Math.Max(20, sec));
     }
@@ -60,7 +63,7 @@ public sealed class AlertWorker : BackgroundService
 
         var instances = await UtmDiscovery.DiscoverAsync(ct).ConfigureAwait(false);
         var health = await checker.CheckAsync(instances, ct).ConfigureAwait(false);
-        string machine = Environment.MachineName;
+        var ctx = AlertContext.Build(_names);
 
         foreach (var h in health)
         {
@@ -74,7 +77,7 @@ public sealed class AlertWorker : BackgroundService
                 bool cooled = DateTime.UtcNow - prev.LastAlertUtc >= TimeSpan.FromMinutes(Math.Max(1, settings.CooldownMinutes));
                 if (settings.Enabled && settings.WantsKind(k) && (isNew || cooled))
                 {
-                    await Send(settings, BuildProblem(h, machine), svc, ct).ConfigureAwait(false);
+                    await Send(settings, ctx.Problem(h), svc, ct).ConfigureAwait(false);
                     _state[svc] = (h.Verdict, DateTime.UtcNow);
                     continue;
                 }
@@ -83,7 +86,7 @@ public sealed class AlertWorker : BackgroundService
                      && AlertNotifier.KindForVerdict(prev.Verdict) is not null)   // был проблемный → стал Ok
             {
                 if (settings.Enabled && settings.OnRecovery)
-                    await Send(settings, BuildRecovery(h, machine), svc, ct).ConfigureAwait(false);
+                    await Send(settings, ctx.Recovery(h), svc, ct).ConfigureAwait(false);
             }
 
             _state[svc] = (h.Verdict, _state.TryGetValue(svc, out var s2) ? s2.LastAlertUtc : DateTime.MinValue);
@@ -99,29 +102,105 @@ public sealed class AlertWorker : BackgroundService
             else _log.LogWarning("Уведомление [{Ch}] не отправлено ({Svc}): {Err}", kv.Key, svc, kv.Value);
         }
     }
+}
 
-    private static AlertMessage BuildProblem(InstanceHealth h, string machine)
+/// <summary>Контекст для сборки сообщений: человеческие имена УТМ, внешние порты, адрес панели.
+/// Общий для фонового воркера и тестовой кнопки — чтобы письма выглядели одинаково.</summary>
+public sealed class AlertContext
+{
+    private readonly NameStore _names;
+    private readonly Dictionary<string, int> _extPorts;
+    public string Machine { get; } = Environment.MachineName;
+    public string? LanIp { get; }
+    public string? PanelUrl => LanIp is null ? null : $"http://{LanIp}:8090/";
+
+    private AlertContext(NameStore names, Dictionary<string, int> extPorts, string? lanIp)
     {
-        string name = h.Instance.ServiceName;
-        string fsrar = h.Info?.OwnerId ?? h.Instance.ExpectedFsrar ?? "—";
-        string head = h.Verdict switch
-        {
-            HealthVerdict.NeedRsa => "нужен перевыпуск RSA",
-            HealthVerdict.SigningBroken => "подпись падает",
-            HealthVerdict.SigningUnconfirmed => "подпись не подтверждена",
-            _ => "сбой",
-        };
-        var body = $"{h.Reason}\nФСРАР {fsrar}, порт {h.Instance.Port}, машина {machine}\nВремя: {DateTime.Now:yyyy-MM-dd HH:mm:ss}";
-        return new AlertMessage(AlertNotifier.KindForVerdict(h.Verdict)!.Value,
-            $"УТМ [{machine}] {name}: {head}", body);
+        _names = names; _extPorts = extPorts; LanIp = lanIp;
     }
 
-    private static AlertMessage BuildRecovery(InstanceHealth h, string machine)
+    public static AlertContext Build(NameStore names)
     {
-        string name = h.Instance.ServiceName;
+        var ext = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            var stored = OrchestratorState.Load(OrchestratorState.DefaultPath);
+            foreach (var i in stored.Instances.Where(i => i.ExternalPort.HasValue))
+                ext.TryAdd(i.ServiceName, i.ExternalPort!.Value);
+        }
+        catch { /* нет state.json — ссылки на УТМ будут по локальному порту */ }
+        string? lan = null;
+        try { if (OperatingSystem.IsWindows()) lan = UtmOrchestrator.Core.Network.UpnpManager.LanIp(); } catch { }
+        return new AlertContext(names, ext, lan);
+    }
+
+    private string UtmName(InstanceHealth h) => _names.Get(h.Instance.TokenSerial) ?? h.Instance.ServiceName;
+
+    private string? UtmUrl(InstanceHealth h)
+    {
+        if (LanIp is null) return null;
+        int port = _extPorts.TryGetValue(h.Instance.ServiceName, out var ep) ? ep : h.Instance.Port;
+        return $"http://{LanIp}:{port}/";
+    }
+
+    public AlertMessage Problem(InstanceHealth h)
+    {
+        var kind = AlertNotifier.KindForVerdict(h.Verdict) ?? AlertKind.Faulty;
+        string name = UtmName(h);
+        string fsrar = h.Info?.OwnerId ?? h.Instance.ExpectedFsrar ?? "—";
+        string reason = h.Reason ?? AlertHints.Label(kind);
+        return new AlertMessage(kind,
+            $"{AlertHints.Emoji(kind)} УТМ «{name}» [{Machine}]: {AlertHints.Label(kind).ToLowerInvariant()}",
+            $"{reason}\nФСРАР {fsrar}, порт {h.Instance.Port}, машина {Machine}")
+        {
+            Machine = Machine, Utm = name, Service = h.Instance.ServiceName, Fsrar = fsrar, Port = h.Instance.Port,
+            Reason = reason, Hint = AlertHints.Hint(kind), PanelUrl = PanelUrl, UtmUrl = UtmUrl(h),
+        };
+    }
+
+    public AlertMessage Recovery(InstanceHealth h)
+    {
+        string name = UtmName(h);
         string fsrar = h.Info?.OwnerId ?? h.Instance.ExpectedFsrar ?? "—";
         return new AlertMessage(AlertKind.Recovery,
-            $"УТМ [{machine}] {name}: вернулся в норму",
-            $"Подпись/обмен восстановлены.\nФСРАР {fsrar}, порт {h.Instance.Port}, машина {machine}\nВремя: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            $"🟢 УТМ «{name}» [{Machine}]: вернулся в норму",
+            $"Подпись и обмен восстановлены.\nФСРАР {fsrar}, порт {h.Instance.Port}, машина {Machine}")
+        {
+            Machine = Machine, Utm = name, Service = h.Instance.ServiceName, Fsrar = fsrar, Port = h.Instance.Port,
+            Reason = "Подпись и обмен восстановлены — УТМ снова отвечает и подписывает документы.",
+            Hint = AlertHints.Hint(AlertKind.Recovery), PanelUrl = PanelUrl, UtmUrl = UtmUrl(h),
+        };
+    }
+
+    /// <summary>Тестовое сообщение из настроек: показывает, какие события и каналы включены.</summary>
+    public AlertMessage Test(AlertSettings s, int utmTotal, int utmOk)
+    {
+        var events = new List<string>();
+        if (s.OnFaulty) events.Add("сбой УТМ");
+        if (s.OnNeedRsa) events.Add("нужен перевыпуск RSA");
+        if (s.OnSigningBroken) events.Add("подпись падает");
+        if (s.OnSigningUnconfirmed) events.Add("подпись не подтверждена");
+        if (s.OnRecovery) events.Add("возврат в норму");
+        var channels = new List<string>();
+        if (s.Email.Enabled) channels.Add("Email");
+        if (s.Telegram.Enabled) channels.Add("Telegram");
+        if (s.Max.Enabled) channels.Add("MAX");
+
+        return new AlertMessage(AlertKind.Test,
+            $"🔵 УТМ:Оркестратор [{Machine}]: тест уведомлений",
+            "Это тестовое сообщение. Если вы его видите — канал настроен верно.")
+        {
+            Machine = Machine,
+            Hint = AlertHints.Hint(AlertKind.Test),
+            PanelUrl = PanelUrl,
+            Extra = new[]
+            {
+                ("УТМ на машине", utmTotal == 0 ? "—" : $"{utmOk} из {utmTotal} в норме"),
+                ("Уведомления", s.Enabled ? "включены" : "ВЫКЛЮЧЕНЫ (включите в настройках)"),
+                ("События", events.Count == 0 ? "ни одно не выбрано" : string.Join(", ", events)),
+                ("Каналы", channels.Count == 0 ? "ни один не включён" : string.Join(", ", channels)),
+                ("Пауза между повторами", $"{s.CooldownMinutes} мин"),
+            },
+        };
     }
 }

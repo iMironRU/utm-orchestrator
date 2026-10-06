@@ -72,7 +72,7 @@ public sealed class TelegramAlertChannel : IAlertChannel
             var form = new FormUrlEncodedContent(new[]
             {
                 new KeyValuePair<string, string>("chat_id", _s.ChatId!),
-                new KeyValuePair<string, string>("text", msg.Title + "\n\n" + msg.Body),
+                new KeyValuePair<string, string>("text", EmailHtml.RenderText(msg)),
                 new KeyValuePair<string, string>("disable_web_page_preview", "true"),
             });
             var resp = await h.PostAsync($"https://api.telegram.org/bot{token}/sendMessage", form, ct).ConfigureAwait(false);

@@ -1869,13 +1869,19 @@ app.MapPost("/api/alerts", (AlertUpdateRequest req) =>
 });
 
 // Отправить тестовое уведомление во все включённые каналы (по СОХРАНЁННЫМ настройкам — сперва сохрани).
-app.MapPost("/api/alerts/test", async (CancellationToken ct) =>
+app.MapPost("/api/alerts/test", async (NameStore names, SerialCache serials, CancellationToken ct) =>
 {
     var s = UtmOrchestrator.Core.Alerts.AlertSettings.Load();
-    var msg = new UtmOrchestrator.Core.Alerts.AlertMessage(
-        UtmOrchestrator.Core.Alerts.AlertKind.Recovery,
-        $"УТМ-оркестратор [{Environment.MachineName}]: тест уведомлений",
-        $"Это тестовое сообщение. Если вы его видите — канал настроен верно.\nВремя: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+    // Тестовое письмо в том же оформлении, что и боевые: шапка, карточка, что включено, ссылка на панель.
+    int total = 0, okCount = 0;
+    try
+    {
+        var inst = await UtmDiscovery.DiscoverAsync(ct, scanTokens: false, serials);
+        var hs = await new HealthChecker().CheckAsync(inst, ct);
+        total = hs.Count; okCount = hs.Count(h => h.IsOk);
+    }
+    catch { /* сводка по парку — необязательная часть теста */ }
+    var msg = UtmOrchestrator.Service.AlertContext.Build(names).Test(s, total, okCount);
     var res = await UtmOrchestrator.Core.Alerts.AlertNotifier.SendAsync(s, msg, ct);
     bool anyEnabled = res.Count > 0;
     return Results.Json(new { ok = anyEnabled && res.Values.All(v => v is null), results = res, anyEnabled });
