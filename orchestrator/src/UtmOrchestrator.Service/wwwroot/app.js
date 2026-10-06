@@ -1616,6 +1616,13 @@
       })
       .catch(function () { state.settingsLoaded = true; });
   }
+  // Настройки уведомлений о сбоях (Email/Telegram/MAX) — без секретов (HasPassword/HasToken).
+  function loadAlerts() {
+    fetch('/api/alerts', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { state.alerts = d; state.alertsLoaded = true; if (state.screen === 'settings') render(); })
+      .catch(function () { state.alertsLoaded = true; });
+  }
   // Сохранить настройки безопасности (пароль опционально — только если введён новый).
   function saveSettings(newPassword) {
     var body = {
@@ -1748,7 +1755,58 @@
       '<button data-action="uninstallOrchestrator" style="background:' + c.error + ';border:none;color:#fff;padding:9px 16px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;flex-shrink:0;">Удалить всё</button>' +
     '</div>';
 
-    return '<div style="display:flex;flex-direction:column;gap:16px;">' + security + pins + schedule + firewall + theme + dangerZone + '</div>';
+    // --- Уведомления о сбоях (Email/Telegram/MAX) ---
+    var a = state.alerts || {}, ae = a.Email || {}, at = a.Telegram || {}, am = a.Max || {};
+    var fieldCss = 'background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:7px 10px;border-radius:7px;font:12.5px system-ui,sans-serif;';
+    function ck(id, label, on) {
+      return '<label style="display:inline-flex;align-items:center;gap:6px;font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;white-space:nowrap;">' +
+        '<input type="checkbox" id="' + id + '"' + (on ? ' checked' : '') + '/> ' + esc(label) + '</label>';
+    }
+    function tin(id, ph, val, w) {
+      return '<input id="' + id + '" type="text" value="' + esc(val == null ? '' : String(val)) + '" placeholder="' + esc(ph) + '" style="' + fieldCss + (w ? 'width:' + w + ';' : 'flex:1;min-width:140px;') + '"/>';
+    }
+    function chanHead(enId, title, on, hasSecret) {
+      return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">' +
+        '<div style="font:700 12.5px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(title) +
+        (hasSecret ? ' <span style="font:11px system-ui,sans-serif;color:' + c.ok + ';">· секрет сохранён</span>' : '') + '</div>' +
+        ck(enId, 'включён', !!on) + '</div>';
+    }
+    var row = 'display:flex;gap:8px;flex-wrap:wrap;align-items:center;';
+    var alerts = '<div style="display:flex;flex-direction:column;gap:12px;padding:16px 18px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">' +
+        '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Уведомления о сбоях</div>' + ck('al-enabled', 'Включить уведомления', !!a.Enabled) + '</div>' +
+      '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">Оркестратор сам шлёт сообщение при сбое УТМ в выбранные каналы. Секреты хранятся на машине в зашифрованном виде.</div>' +
+      // события
+      '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">Слать о событиях:</div>' +
+      '<div style="' + row + '">' + ck('al-onFaulty', 'сбой', a.OnFaulty !== false) + ck('al-onNeedRsa', 'нужен RSA', a.OnNeedRsa !== false) +
+        ck('al-onSigningBroken', 'подпись падает', a.OnSigningBroken !== false) + ck('al-onUnconfirmed', 'не подтверждена', !!a.OnSigningUnconfirmed) +
+        ck('al-onRecovery', 'восстановление', a.OnRecovery !== false) + '</div>' +
+      '<div style="' + row + '"><span style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">Не чаще раза в</span>' + tin('al-cooldown', '30', a.CooldownMinutes || 30, '70px') + '<span style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">мин на один УТМ</span></div>' +
+      // Email
+      '<div style="display:flex;flex-direction:column;gap:7px;padding:12px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;">' +
+        chanHead('al-email-en', 'Email (SMTP)', ae.Enabled, ae.HasPassword) +
+        '<div style="' + row + '">' + tin('al-email-host', 'smtp.mail.ru', ae.Host) + tin('al-email-port', '465', ae.Port || 465, '70px') + ck('al-email-ssl', 'SSL (465)', ae.UseSsl !== false) + '</div>' +
+        '<div style="' + row + '">' + tin('al-email-from', 'отправитель (логин SMTP)', ae.From) + '</div>' +
+        '<div style="' + row + '"><input id="al-email-pass" type="password" placeholder="' + (ae.HasPassword ? '•••• (задан, введите для смены)' : 'пароль приложения') + '" autocomplete="new-password" style="' + fieldCss + 'flex:1;min-width:140px;"/></div>' +
+        '<div style="' + row + '">' + tin('al-email-to', 'получатели через запятую', (ae.To || []).join(', ')) + '</div>' +
+      '</div>' +
+      // Telegram
+      '<div style="display:flex;flex-direction:column;gap:7px;padding:12px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;">' +
+        chanHead('al-tg-en', 'Telegram', at.Enabled, at.HasToken) +
+        '<div style="' + row + '"><input id="al-tg-token" type="password" placeholder="' + (at.HasToken ? '•••• токен (введите для смены)' : 'токен бота (@BotFather)') + '" autocomplete="new-password" style="' + fieldCss + 'flex:1;min-width:140px;"/>' + tin('al-tg-chat', 'chat_id', at.ChatId, '140px') + '</div>' +
+      '</div>' +
+      // MAX
+      '<div style="display:flex;flex-direction:column;gap:7px;padding:12px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;">' +
+        chanHead('al-max-en', 'MAX (МАКС)', am.Enabled, am.HasToken) +
+        '<div style="' + row + '"><input id="al-max-token" type="password" placeholder="' + (am.HasToken ? '•••• токен (введите для смены)' : 'токен бота MAX') + '" autocomplete="new-password" style="' + fieldCss + 'flex:1;min-width:140px;"/>' + tin('al-max-chat', 'chat_id', am.ChatId, '140px') + '</div>' +
+      '</div>' +
+      '<div style="' + row + 'padding-top:6px;border-top:1px solid ' + c.border + ';">' +
+        '<button data-action="saveAlerts" style="background:' + c.brand + ';border:none;color:#fff;padding:9px 18px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Сохранить</button>' +
+        '<button data-action="testAlerts" style="' + btnGhost(c) + '">Отправить тест</button>' +
+      '</div>' +
+    '</div>';
+
+    return '<div style="display:flex;flex-direction:column;gap:16px;">' + security + pins + schedule + firewall + theme + alerts + dangerZone + '</div>';
   }
 
   /* ====================== ГЛАВНЫЙ РЕНДЕР ====================== */
@@ -2100,7 +2158,40 @@
         showToast('Сохранено: ' + name);
       } catch (e) { showToast('Не удалось сохранить файл'); }
     },
-    goSettings: function () { setScreen('settings'); if (!state.settingsLoaded) loadSettings(); },
+    goSettings: function () { setScreen('settings'); if (!state.settingsLoaded) loadSettings(); if (!state.alertsLoaded) loadAlerts(); },
+
+    /* Сохранить настройки уведомлений. Секреты (пароль/токены) шлём только если введены новые. */
+    saveAlerts: function () {
+      function val(id) { var e = document.getElementById(id); return e ? e.value.trim() : ''; }
+      function chk(id) { var e = document.getElementById(id); return e ? !!e.checked : false; }
+      var toArr = val('al-email-to').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+      var body = {
+        enabled: chk('al-enabled'),
+        onFaulty: chk('al-onFaulty'), onNeedRsa: chk('al-onNeedRsa'), onSigningBroken: chk('al-onSigningBroken'),
+        onSigningUnconfirmed: chk('al-onUnconfirmed'), onRecovery: chk('al-onRecovery'),
+        cooldownMinutes: parseInt(val('al-cooldown'), 10) || 30,
+        email: { enabled: chk('al-email-en'), host: val('al-email-host'), port: parseInt(val('al-email-port'), 10) || 465, useSsl: chk('al-email-ssl'), from: val('al-email-from'), password: val('al-email-pass') || null, to: toArr },
+        telegram: { enabled: chk('al-tg-en'), token: val('al-tg-token') || null, chatId: val('al-tg-chat') },
+        max: { enabled: chk('al-max-en'), token: val('al-max-token') || null, chatId: val('al-max-chat') },
+      };
+      showToast('Сохраняю настройки уведомлений…');
+      fetch('/api/alerts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        .then(function (r) { if (!r.ok) throw new Error(); return r.json(); })
+        .then(function (d) { state.alerts = d; showToast('Настройки уведомлений сохранены'); render(); })
+        .catch(function () { showToast('Не удалось сохранить настройки уведомлений'); });
+    },
+    /* Отправить тест во все включённые каналы (по сохранённым настройкам). */
+    testAlerts: function () {
+      showToast('Отправляю тестовое уведомление…');
+      fetch('/api/alerts/test', { method: 'POST' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d.anyEnabled) { showToast('Нет включённых каналов — включите канал и сохраните'); return; }
+          var errs = Object.keys(d.results || {}).filter(function (k) { return d.results[k]; }).map(function (k) { return d.results[k]; });
+          showToast(errs.length ? ('Ошибки: ' + errs.join(' | ')) : 'Тест отправлен во все включённые каналы ✓');
+        })
+        .catch(function () { showToast('Не удалось отправить тест'); });
+    },
     goInstall: function () { setState({ screen: 'install', mobileNavOpen: false, notifOpen: false }); load2Utm(); },
 
     openUtm: function (el) { setState({ screen: 'utm-detail', selectedUtmId: el.getAttribute('data-id'), detailTab: 'transfer', mobileNavOpen: false, notifOpen: false }); loadExports(); loadNetStatus(); },

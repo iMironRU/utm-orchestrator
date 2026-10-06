@@ -12,6 +12,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddWindowsService(options => options.ServiceName = "UtmOrchestrator");
 builder.Services.AddHostedService<BootBringUpWorker>(); // подъём УТМ на загрузке (peel-down)
 builder.Services.AddHostedService<HealthWorker>();
+builder.Services.AddHostedService<AlertWorker>();      // уведомления о сбоях (Email/Telegram/MAX)
 builder.Services.AddSingleton<NameStore>();
 builder.Services.AddSingleton<SerialCache>();
 builder.Services.AddSingleton<OrgInfoCache>();
@@ -1830,6 +1831,56 @@ for($i=0; $i -lt 12 -and (Test-Path $root); $i++){ try { [System.IO.Directory]::
     return Results.Accepted(value: new { ok = true });
 });
 
+// --- Уведомления о сбоях (Email/Telegram/MAX) ---
+// Чтение — без секретов (Redacted). Сохранение — секреты шифруем DPAPI; пустой секрет = оставить прежний.
+app.MapGet("/api/alerts", () => Results.Json(UtmOrchestrator.Core.Alerts.AlertSettings.Load().Redacted()));
+
+app.MapPost("/api/alerts", (AlertUpdateRequest req) =>
+{
+    if (!OperatingSystem.IsWindows()) return Results.BadRequest(new { error = "только Windows" });
+    var s = UtmOrchestrator.Core.Alerts.AlertSettings.Load();
+    s.Enabled = req.Enabled;
+    s.OnFaulty = req.OnFaulty; s.OnNeedRsa = req.OnNeedRsa; s.OnSigningBroken = req.OnSigningBroken;
+    s.OnSigningUnconfirmed = req.OnSigningUnconfirmed; s.OnRecovery = req.OnRecovery;
+    s.CooldownMinutes = req.CooldownMinutes <= 0 ? 30 : req.CooldownMinutes;
+
+    if (req.Email is { } em)
+    {
+        s.Email.Enabled = em.Enabled; s.Email.Host = em.Host; s.Email.Port = em.Port <= 0 ? 465 : em.Port;
+        s.Email.UseSsl = em.UseSsl; s.Email.From = em.From; s.Email.To = em.To ?? new();
+        if (!string.IsNullOrEmpty(em.Password))
+            s.Email.PasswordEnc = UtmOrchestrator.Core.Alerts.AlertSettings.Protect(em.Password);
+    }
+    if (req.Telegram is { } tg)
+    {
+        s.Telegram.Enabled = tg.Enabled; s.Telegram.ChatId = tg.ChatId;
+        if (!string.IsNullOrEmpty(tg.Token))
+            s.Telegram.BotTokenEnc = UtmOrchestrator.Core.Alerts.AlertSettings.Protect(tg.Token);
+    }
+    if (req.Max is { } mx)
+    {
+        s.Max.Enabled = mx.Enabled; s.Max.ChatId = mx.ChatId;
+        if (!string.IsNullOrEmpty(mx.Token))
+            s.Max.BotTokenEnc = UtmOrchestrator.Core.Alerts.AlertSettings.Protect(mx.Token);
+    }
+    try { s.Save(); }
+    catch (Exception e) { return Results.Problem("не удалось сохранить настройки: " + e.Message); }
+    return Results.Json(s.Redacted());
+});
+
+// Отправить тестовое уведомление во все включённые каналы (по СОХРАНЁННЫМ настройкам — сперва сохрани).
+app.MapPost("/api/alerts/test", async (CancellationToken ct) =>
+{
+    var s = UtmOrchestrator.Core.Alerts.AlertSettings.Load();
+    var msg = new UtmOrchestrator.Core.Alerts.AlertMessage(
+        UtmOrchestrator.Core.Alerts.AlertKind.Recovery,
+        $"УТМ-оркестратор [{Environment.MachineName}]: тест уведомлений",
+        $"Это тестовое сообщение. Если вы его видите — канал настроен верно.\nВремя: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+    var res = await UtmOrchestrator.Core.Alerts.AlertNotifier.SendAsync(s, msg, ct);
+    bool anyEnabled = res.Count > 0;
+    return Results.Json(new { ok = anyEnabled && res.Values.All(v => v is null), results = res, anyEnabled });
+});
+
 // --- Очередь интерактивных заданий (веб ↔ трей) ---
 // Веб кладёт задание (scan/heal), трей (в интерактивной сессии) забирает pending,
 // выполняет и возвращает результат, веб опрашивает по id. Только localhost.
@@ -2212,6 +2263,13 @@ record ImportCommitRequest(string? Handle, int Port);
 record DeleteUtmRequest(string? Service, bool DeleteFiles);
 record UninstallRequest(bool Confirm);
 record SettingsRequest(bool RequireAuth, string? Username, bool NetworkAccess, List<string>? AllowedIps, string? NewPassword);
+// Уведомления о сбоях. Секреты (Password/Token) приходят ПЛЕЙНТЕКСТОМ только когда их меняют;
+// пусто/null = оставить прежний (хранится зашифрованным). Наружу секреты не отдаём (Redacted).
+record AlertEmailReq(bool Enabled, string? Host, int Port, bool UseSsl, string? From, string? Password, List<string>? To);
+record AlertBotReq(bool Enabled, string? Token, string? ChatId);
+record AlertUpdateRequest(bool Enabled, bool OnFaulty, bool OnNeedRsa, bool OnSigningBroken,
+    bool OnSigningUnconfirmed, bool OnRecovery, int CooldownMinutes,
+    AlertEmailReq? Email, AlertBotReq? Telegram, AlertBotReq? Max);
 
 // Кэш статуса обмена по папке УТМ: transport_info.log читаем не чаще раза в ~20с
 // (обмен идёт циклами по минутам, чаще незачем; /api/status опрашивают часто).
