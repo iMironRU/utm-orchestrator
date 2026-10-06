@@ -1624,6 +1624,19 @@
       .then(function (r) { return r.json(); })
       .then(function (d) { state.alerts = d; state.alertsLoaded = true; if (state.screen === 'settings') render(); })
       .catch(function () { state.alertsLoaded = true; });
+    loadAlertsHealth();
+  }
+  // Последняя проверка доступности каналов (фоновая раз в ~10 мин / кнопка) — бейджи ✓/✗ у каналов.
+  function loadAlertsHealth() {
+    fetch('/api/alerts/health', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var map = {};
+        (d.channels || []).forEach(function (ch) { map[ch.channel] = ch; });
+        state.alertsHealth = map;
+        if (state.screen === 'settings') render();
+      })
+      .catch(function () {});
   }
   // Сохранить настройки безопасности (пароль опционально — только если введён новый).
   function saveSettings(newPassword) {
@@ -1758,7 +1771,7 @@
     '</div>';
 
     // --- Уведомления о сбоях (Email/Telegram/MAX) ---
-    var a = state.alerts || {}, ae = a.Email || {}, at = a.Telegram || {}, am = a.Max || {};
+    var a = state.alerts || {}, ae = a.email || {}, at = a.telegram || {}, am = a.max || {};
     var fieldCss = 'background:' + c.subtleBg + ';border:1px solid ' + c.border + ';color:' + c.textPrimary + ';padding:7px 10px;border-radius:7px;font:12.5px system-ui,sans-serif;';
     function ck(id, label, on) {
       return '<label style="display:inline-flex;align-items:center;gap:6px;font:12.5px system-ui,sans-serif;color:' + c.textSecondary + ';cursor:pointer;white-space:nowrap;">' +
@@ -1767,44 +1780,56 @@
     function tin(id, ph, val, w) {
       return '<input id="' + id + '" type="text" value="' + esc(val == null ? '' : String(val)) + '" placeholder="' + esc(ph) + '" style="' + fieldCss + (w ? 'width:' + w + ';' : 'flex:1;min-width:140px;') + '"/>';
     }
+    // Бейдж доступности канала по последней проверке (ключ канала выводим из id чекбокса).
+    function reachBadge(enId) {
+      var key = enId.indexOf('email') >= 0 ? 'email' : enId.indexOf('tg') >= 0 ? 'telegram' : 'max';
+      var h = (state.alertsHealth || {})[key];
+      if (!h) return '';
+      var col = h.ok ? c.ok : c.error;
+      var when = h.checkedAt ? new Date(h.checkedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
+      return '<div title="' + esc(h.detail || '') + '" style="font:11.5px/1.4 system-ui,sans-serif;color:' + col + ';">' +
+        (h.ok ? '✓ доступен' : '✗ недоступен') + (when ? ' · ' + esc(when) : '') +
+        ' <span style="color:' + c.textTertiary + ';">— ' + esc(h.detail || '') + '</span></div>';
+    }
     function chanHead(enId, title, on, hasSecret) {
       return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">' +
         '<div style="font:700 12.5px system-ui,sans-serif;color:' + c.textPrimary + ';">' + esc(title) +
         (hasSecret ? ' <span style="font:11px system-ui,sans-serif;color:' + c.ok + ';">· секрет сохранён</span>' : '') + '</div>' +
-        ck(enId, 'включён', !!on) + '</div>';
+        ck(enId, 'включён', !!on) + '</div>' + reachBadge(enId);
     }
     var row = 'display:flex;gap:8px;flex-wrap:wrap;align-items:center;';
     var alerts = '<div style="display:flex;flex-direction:column;gap:12px;padding:16px 18px;background:' + c.cardBg + ';border:1px solid ' + c.border + ';border-radius:12px;">' +
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">' +
-        '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Уведомления о сбоях</div>' + ck('al-enabled', 'Включить уведомления', !!a.Enabled) + '</div>' +
+        '<div style="font:700 13px system-ui,sans-serif;color:' + c.textPrimary + ';">Уведомления о сбоях</div>' + ck('al-enabled', 'Включить уведомления', !!a.enabled) + '</div>' +
       '<div style="font:11.5px/1.5 system-ui,sans-serif;color:' + c.textTertiary + ';">Оркестратор сам шлёт сообщение при сбое УТМ в выбранные каналы. Секреты хранятся на машине в зашифрованном виде.</div>' +
       // события
       '<div style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">Слать о событиях:</div>' +
-      '<div style="' + row + '">' + ck('al-onFaulty', 'сбой', a.OnFaulty !== false) + ck('al-onNeedRsa', 'нужен RSA', a.OnNeedRsa !== false) +
-        ck('al-onSigningBroken', 'подпись падает', a.OnSigningBroken !== false) + ck('al-onUnconfirmed', 'не подтверждена', !!a.OnSigningUnconfirmed) +
-        ck('al-onRecovery', 'восстановление', a.OnRecovery !== false) + '</div>' +
-      '<div style="' + row + '"><span style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">Не чаще раза в</span>' + tin('al-cooldown', '30', a.CooldownMinutes || 30, '70px') + '<span style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">мин на один УТМ</span></div>' +
+      '<div style="' + row + '">' + ck('al-onFaulty', 'сбой', a.onFaulty !== false) + ck('al-onNeedRsa', 'нужен RSA', a.onNeedRsa !== false) +
+        ck('al-onSigningBroken', 'подпись падает', a.onSigningBroken !== false) + ck('al-onUnconfirmed', 'не подтверждена', !!a.onSigningUnconfirmed) +
+        ck('al-onRecovery', 'восстановление', a.onRecovery !== false) + '</div>' +
+      '<div style="' + row + '"><span style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">Не чаще раза в</span>' + tin('al-cooldown', '30', a.cooldownMinutes || 30, '70px') + '<span style="font:12px system-ui,sans-serif;color:' + c.textSecondary + ';">мин на один УТМ</span></div>' +
       // Email
       '<div style="display:flex;flex-direction:column;gap:7px;padding:12px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;">' +
-        chanHead('al-email-en', 'Email (SMTP)', ae.Enabled, ae.HasPassword) +
-        '<div style="' + row + '">' + tin('al-email-host', 'smtp.mail.ru', ae.Host) + tin('al-email-port', '465', ae.Port || 465, '70px') + ck('al-email-ssl', 'SSL (465)', ae.UseSsl !== false) + '</div>' +
-        '<div style="' + row + '">' + tin('al-email-from', 'отправитель (логин SMTP)', ae.From) + '</div>' +
-        '<div style="' + row + '"><input id="al-email-pass" type="password" placeholder="' + (ae.HasPassword ? '•••• (задан, введите для смены)' : 'пароль приложения') + '" autocomplete="new-password" style="' + fieldCss + 'flex:1;min-width:140px;"/></div>' +
-        '<div style="' + row + '">' + tin('al-email-to', 'получатели через запятую', (ae.To || []).join(', ')) + '</div>' +
+        chanHead('al-email-en', 'Email (SMTP)', ae.enabled, ae.hasPassword) +
+        '<div style="' + row + '">' + tin('al-email-host', 'smtp.mail.ru', ae.host) + tin('al-email-port', '465', ae.port || 465, '70px') + ck('al-email-ssl', 'SSL (465)', ae.useSsl !== false) + '</div>' +
+        '<div style="' + row + '">' + tin('al-email-from', 'отправитель (логин SMTP)', ae.from) + '</div>' +
+        '<div style="' + row + '"><input id="al-email-pass" type="password" placeholder="' + (ae.hasPassword ? '•••• (задан, введите для смены)' : 'пароль приложения') + '" autocomplete="new-password" style="' + fieldCss + 'flex:1;min-width:140px;"/></div>' +
+        '<div style="' + row + '">' + tin('al-email-to', 'получатели через запятую', (ae.to || []).join(', ')) + '</div>' +
       '</div>' +
       // Telegram
       '<div style="display:flex;flex-direction:column;gap:7px;padding:12px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;">' +
-        chanHead('al-tg-en', 'Telegram', at.Enabled, at.HasToken) +
-        '<div style="' + row + '"><input id="al-tg-token" type="password" placeholder="' + (at.HasToken ? '•••• токен (введите для смены)' : 'токен бота (@BotFather)') + '" autocomplete="new-password" style="' + fieldCss + 'flex:1;min-width:140px;"/>' + tin('al-tg-chat', 'chat_id', at.ChatId, '140px') + '</div>' +
+        chanHead('al-tg-en', 'Telegram', at.enabled, at.hasToken) +
+        '<div style="' + row + '"><input id="al-tg-token" type="password" placeholder="' + (at.hasToken ? '•••• токен (введите для смены)' : 'токен бота (@BotFather)') + '" autocomplete="new-password" style="' + fieldCss + 'flex:1;min-width:140px;"/>' + tin('al-tg-chat', 'chat_id', at.chatId, '140px') + '</div>' +
       '</div>' +
       // MAX
       '<div style="display:flex;flex-direction:column;gap:7px;padding:12px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:9px;">' +
-        chanHead('al-max-en', 'MAX (МАКС)', am.Enabled, am.HasToken) +
-        '<div style="' + row + '"><input id="al-max-token" type="password" placeholder="' + (am.HasToken ? '•••• токен (введите для смены)' : 'токен бота MAX') + '" autocomplete="new-password" style="' + fieldCss + 'flex:1;min-width:140px;"/>' + tin('al-max-chat', 'chat_id', am.ChatId, '140px') + '</div>' +
+        chanHead('al-max-en', 'MAX (МАКС)', am.enabled, am.hasToken) +
+        '<div style="' + row + '"><input id="al-max-token" type="password" placeholder="' + (am.hasToken ? '•••• токен (введите для смены)' : 'токен бота MAX') + '" autocomplete="new-password" style="' + fieldCss + 'flex:1;min-width:140px;"/>' + tin('al-max-chat', 'chat_id', am.chatId, '140px') + '</div>' +
       '</div>' +
       '<div style="' + row + 'padding-top:6px;border-top:1px solid ' + c.border + ';">' +
         '<button data-action="saveAlerts" style="background:' + c.brand + ';border:none;color:#fff;padding:9px 18px;border-radius:8px;font:600 12.5px system-ui,sans-serif;cursor:pointer;">Сохранить</button>' +
         '<button data-action="testAlerts" style="' + btnGhost(c) + '">Отправить тест</button>' +
+        '<button data-action="checkAlerts" title="Проверить, доступны ли серверы каналов и приняты ли токены — без отправки сообщений" style="' + btnGhost(c) + '">Проверить доступность</button>' +
       '</div>' +
     '</div>';
 
@@ -2224,6 +2249,23 @@
           showToast(errs.length ? ('Ошибки: ' + errs.join(' | ')) : 'Тест отправлен во все включённые каналы ✓');
         })
         .catch(function () { showToast('Не удалось отправить тест'); });
+    },
+    /* Проверить доступность серверов каналов (Telegram getMe / MAX /me / SMTP connect) — без отправки.
+       Результат — бейджи ✓/✗ у каналов с причиной. Проверяются все настроенные, даже выключенные. */
+    checkAlerts: function () {
+      showToast('Проверяю доступность каналов…');
+      fetch('/api/alerts/check', { method: 'POST' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var map = {}; (d.channels || []).forEach(function (ch) { map[ch.channel] = ch; });
+          state.alertsHealth = map;
+          var list = d.channels || [];
+          if (!list.length) { showToast('Нет настроенных каналов — задайте хост/токен и сохраните'); render(); return; }
+          var bad = list.filter(function (ch) { return !ch.ok; });
+          showToast(bad.length ? ('Недоступно: ' + bad.map(function (ch) { return ch.channel + ' — ' + ch.detail; }).join(' | ')) : 'Все настроенные каналы доступны ✓');
+          render();
+        })
+        .catch(function () { showToast('Не удалось выполнить проверку'); });
     },
     goInstall: function () { setState({ screen: 'install', mobileNavOpen: false, notifOpen: false }); load2Utm(); },
 

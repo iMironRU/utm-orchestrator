@@ -35,9 +35,27 @@ public sealed class AlertWorker : BackgroundService
         }
     }
 
+    private DateTime _lastProbeUtc = DateTime.MinValue;
+    private static readonly TimeSpan ProbeEvery = TimeSpan.FromMinutes(10);
+
     private async Task Tick(HealthChecker checker, CancellationToken ct)
     {
         var settings = AlertSettings.Load();              // перечитываем каждый цикл — правки из UI сразу в силе
+
+        // Фоновая проверка доступности каналов (~раз в 10 мин, только при включённых уведомлениях):
+        // чтобы ЗАРАНЕЕ видеть в панели, дойдёт ли уведомление (напр. Telegram через прокси недоступен).
+        if (settings.Enabled && DateTime.UtcNow - _lastProbeUtc >= ProbeEvery)
+        {
+            _lastProbeUtc = DateTime.UtcNow;
+            try
+            {
+                var res = await AlertNotifier.CheckAsync(settings, ct).ConfigureAwait(false);
+                foreach (var r in res)
+                    if (!r.Ok) _log.LogWarning("Канал уведомлений [{Ch}] недоступен: {Detail}", r.Channel, r.Detail);
+            }
+            catch (Exception e) { _log.LogWarning(e, "AlertWorker: проверка доступности каналов"); }
+        }
+
         if (BringUpStatus.Active) return;                 // идёт операция — не шлём транзиентные сбои
 
         var instances = await UtmDiscovery.DiscoverAsync(ct).ConfigureAwait(false);

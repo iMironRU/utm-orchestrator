@@ -1881,6 +1881,32 @@ app.MapPost("/api/alerts/test", async (CancellationToken ct) =>
     return Results.Json(new { ok = anyEnabled && res.Values.All(v => v is null), results = res, anyEnabled });
 });
 
+// Проверить доступность серверов каналов (Telegram getMe через прокси, MAX /me, SMTP connect+auth) —
+// БЕЗ отправки сообщений. Проверяются все НАСТРОЕННЫЕ каналы (хост/токен заданы), даже выключенные.
+app.MapPost("/api/alerts/check", async (CancellationToken ct) =>
+{
+    var s = UtmOrchestrator.Core.Alerts.AlertSettings.Load();
+    var res = await UtmOrchestrator.Core.Alerts.AlertNotifier.CheckAsync(s, ct);
+    return Results.Json(new
+    {
+        checkedAt = DateTime.Now,
+        channels = res.Select(r => new { r.Channel, r.Ok, r.Detail }),
+        anyEnabledReachable = UtmOrchestrator.Core.Alerts.AlertHealthCache.AnyEnabledReachable(s),
+    });
+});
+
+// Последний известный результат проверки (фоновая раз в ~10 мин + ручная кнопка) — для бейджей в UI.
+app.MapGet("/api/alerts/health", () =>
+{
+    var s = UtmOrchestrator.Core.Alerts.AlertSettings.Load();
+    var all = UtmOrchestrator.Core.Alerts.AlertHealthCache.All();
+    return Results.Json(new
+    {
+        channels = all.Select(r => new { r.Channel, r.Ok, r.Detail, checkedAt = r.CheckedAtUtc.ToLocalTime() }),
+        anyEnabledReachable = UtmOrchestrator.Core.Alerts.AlertHealthCache.AnyEnabledReachable(s),
+    });
+});
+
 // --- Очередь интерактивных заданий (веб ↔ трей) ---
 // Веб кладёт задание (scan/heal), трей (в интерактивной сессии) забирает pending,
 // выполняет и возвращает результат, веб опрашивает по id. Только localhost.

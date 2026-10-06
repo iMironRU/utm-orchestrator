@@ -22,6 +22,24 @@ public static class AlertNotifier
         new MaxAlertChannel(s.Max),
     };
 
+    /// <summary>Проверить доступность всех НАСТРОЕННЫХ каналов (хост/токен заданы; Enabled не важен —
+    /// проверять можно до включения). Без отправки сообщений. Результаты кладём в <see cref="AlertHealthCache"/>.</summary>
+    public static async Task<IReadOnlyList<ChannelHealth>> CheckAsync(AlertSettings s, CancellationToken ct = default)
+    {
+        var list = new List<ChannelHealth>();
+        foreach (var ch in BuildChannels(s))
+        {
+            if (!ch.Configured) continue;
+            bool ok; string detail;
+            try { (ok, detail) = await ch.CheckAsync(ct).ConfigureAwait(false); }
+            catch (Exception e) { ok = false; detail = e.GetBaseException().Message; }
+            var h = new ChannelHealth(ch.Name, ok, detail, DateTime.UtcNow);
+            AlertHealthCache.Set(h);
+            list.Add(h);
+        }
+        return list;
+    }
+
     /// <summary>Отправить во все ВКЛЮЧЁННЫЕ каналы. Возвращает карту канал→ошибка(null=успех).</summary>
     public static async Task<Dictionary<string, string?>> SendAsync(AlertSettings s, AlertMessage msg, CancellationToken ct = default)
     {

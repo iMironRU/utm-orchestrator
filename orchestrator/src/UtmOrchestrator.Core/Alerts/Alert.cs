@@ -25,6 +25,16 @@ public interface IAlertChannel
     /// <summary>Включён ли канал (по настройкам).</summary>
     bool Enabled { get; }
 
+    /// <summary>Есть ли реквизиты для проверки/отправки (хост/токен). Проверять доступность можно и у выключенного.</summary>
+    bool Configured { get; }
+
     /// <summary>Отправить. Возвращает null при успехе или текст ошибки.</summary>
     Task<string?> SendAsync(AlertMessage msg, CancellationToken ct = default);
+
+    /// <summary>Проверить доступность сервера канала и валидность реквизитов БЕЗ отправки сообщения
+    /// (Telegram getMe, MAX /me, SMTP connect+auth). Ok=false с понятной причиной: недоступен / токен отклонён.</summary>
+    Task<(bool Ok, string Detail)> CheckAsync(CancellationToken ct = default);
 }
+
+/// <summary>Результат проверки доступности канала (для UI и фонового мониторинга).</summary>
+public sealed record ChannelHealth(string Channel, bool Ok, string Detail, DateTime CheckedAtUtc);
