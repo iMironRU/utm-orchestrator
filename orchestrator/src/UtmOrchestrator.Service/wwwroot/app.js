@@ -52,6 +52,8 @@
     utmLogService: null,           // чей лог показываем (null = лог оркестратора)
     utmLogName: '',                // отображаемое имя УТМ для заголовка
     settingsLoaded: false,         // подгружены ли настройки с бэка
+    // Активная вкладка настроек (страница разрослась — режем на вкладки). Запоминаем в localStorage.
+    settingsTab: (function () { try { return localStorage.getItem('utmo.settingsTab') || 'access'; } catch (e) { return 'access'; } })(),
     scannedTokens: null,           // результат скана токенов трея (null = не сканировали)
     scanning: false,               // идёт скан
     healing: false,                // идёт лечение
@@ -1806,7 +1808,32 @@
       '</div>' +
     '</div>';
 
-    return '<div style="display:flex;flex-direction:column;gap:16px;">' + security + pins + schedule + firewall + theme + alerts + dangerZone + '</div>';
+    // --- Вкладки: страница разрослась, показываем по одной группе за раз ---
+    var tabs = [
+      { key: 'access',   label: 'Доступ' },
+      { key: 'schedule', label: 'Расписание и порты' },
+      { key: 'alerts',   label: 'Уведомления' },
+      { key: 'ui',       label: 'Интерфейс' },
+      { key: 'danger',   label: 'Опасная зона' },
+    ];
+    var activeTab = state.settingsTab || 'access';
+    if (!tabs.some(function (t) { return t.key === activeTab; })) activeTab = 'access';
+    var tabStrip = '<div role="tablist" style="display:flex;gap:6px;flex-wrap:wrap;padding:4px;background:' + c.subtleBg + ';border:1px solid ' + c.border + ';border-radius:10px;">' +
+      tabs.map(function (t) {
+        var on = t.key === activeTab;
+        var danger = t.key === 'danger';
+        var bg = on ? (danger ? c.error : c.brand) : 'transparent';
+        var col = on ? '#fff' : (danger ? c.error : c.textSecondary);
+        return '<button role="tab" aria-selected="' + on + '" data-action="setSettingsTab" data-tab="' + t.key + '" style="border:none;background:' + bg + ';color:' + col + ';padding:8px 14px;border-radius:7px;font:600 12.5px system-ui,sans-serif;cursor:pointer;white-space:nowrap;">' + esc(t.label) + '</button>';
+      }).join('') +
+    '</div>';
+    var content = activeTab === 'access'   ? security + pins
+                : activeTab === 'schedule' ? schedule + firewall
+                : activeTab === 'alerts'   ? alerts
+                : activeTab === 'ui'       ? theme
+                : dangerZone;
+
+    return '<div style="display:flex;flex-direction:column;gap:16px;">' + tabStrip + content + '</div>';
   }
 
   /* ====================== ГЛАВНЫЙ РЕНДЕР ====================== */
@@ -2159,6 +2186,12 @@
       } catch (e) { showToast('Не удалось сохранить файл'); }
     },
     goSettings: function () { setScreen('settings'); if (!state.settingsLoaded) loadSettings(); if (!state.alertsLoaded) loadAlerts(); },
+    /* Переключить вкладку настроек (запоминаем, чтобы после перезагрузки открывалась та же). */
+    setSettingsTab: function (el) {
+      var t = el.getAttribute('data-tab') || 'access';
+      try { localStorage.setItem('utmo.settingsTab', t); } catch (e) {}
+      setState({ settingsTab: t });
+    },
 
     /* Сохранить настройки уведомлений. Секреты (пароль/токены) шлём только если введены новые. */
     saveAlerts: function () {
