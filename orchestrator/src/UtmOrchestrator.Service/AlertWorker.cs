@@ -20,6 +20,8 @@ public sealed class AlertWorker : BackgroundService
     private readonly Dictionary<string, (HealthVerdict Verdict, DateTime LastAlertUtc)> _state = new();
     private readonly Dictionary<string, DateTime> _stoppedSince = new();
     private static readonly TimeSpan StoppedGrace = TimeSpan.FromMinutes(3);   // дольше — не «операция», а сбой
+    private readonly Dictionary<string, DateTime> _unreachableSince = new();
+    private static readonly TimeSpan UnreachableGrace = TimeSpan.FromMinutes(3);   // «не отвечает по HTTP» короче — перезапуск/загрузка, не сбой
 
     public AlertWorker(ILogger<AlertWorker> log, IConfiguration config, NameStore names)
     {
@@ -106,6 +108,15 @@ public sealed class AlertWorker : BackgroundService
             }
             else _stoppedSince.Remove(svc);
 
+            // «Не отвечает по HTTP» (Info == null): при перезапуске/подъёме УТМ грузится 1–2 мин — это не сбой.
+            // Уведомляем, только если молчит дольше льготного окна.
+            if (h.Verdict == HealthVerdict.Faulty && h.Info is null)
+            {
+                if (!_unreachableSince.TryGetValue(svc, out var us)) _unreachableSince[svc] = us = DateTime.UtcNow;
+                if (DateTime.UtcNow - us < UnreachableGrace) kind = null;
+            }
+            else _unreachableSince.Remove(svc);
+
             if (kind is { } k)
             {
                 bool isNew = prev.Verdict != h.Verdict;    // появилась проблема / сменился вердикт
@@ -118,14 +129,14 @@ public sealed class AlertWorker : BackgroundService
                 }
             }
             else if (h.Verdict == HealthVerdict.Ok
-                     && (AlertNotifier.KindForVerdict(prev.Verdict) is not null
-                         || (prev.Verdict == HealthVerdict.Stopped && prev.LastAlertUtc != DateTime.MinValue)))   // был проблемный → стал Ok
+                     && prev.LastAlertUtc != DateTime.MinValue)   // восстановление — только если о проблеме уже уведомляли   // был проблемный → стал Ok
             {
                 if (settings.Enabled && settings.OnRecovery)
                     await Send(settings, ctx.Recovery(h), svc, ct).ConfigureAwait(false);
             }
 
-            _state[svc] = (h.Verdict, _state.TryGetValue(svc, out var s2) ? s2.LastAlertUtc : DateTime.MinValue);
+            _state[svc] = (h.Verdict, h.Verdict == HealthVerdict.Ok ? DateTime.MinValue   // норма — сбрасываем: следующая проблема уведомит сразу
+                : _state.TryGetValue(svc, out var s2) ? s2.LastAlertUtc : DateTime.MinValue);
         }
     }
 
