@@ -17,6 +17,8 @@ public sealed class AlertWorker : BackgroundService
     private readonly NameStore _names;
     private readonly TimeSpan _interval;
     private readonly Dictionary<string, (HealthVerdict Verdict, DateTime LastAlertUtc)> _state = new();
+    private readonly Dictionary<string, DateTime> _stoppedSince = new();
+    private static readonly TimeSpan StoppedGrace = TimeSpan.FromMinutes(3);   // дольше — не «операция», а сбой
 
     public AlertWorker(ILogger<AlertWorker> log, IConfiguration config, NameStore names)
     {
@@ -70,6 +72,15 @@ public sealed class AlertWorker : BackgroundService
             string svc = h.Instance.ServiceName;
             var prev = _state.TryGetValue(svc, out var st) ? st : (Verdict: HealthVerdict.Unknown, LastAlertUtc: DateTime.MinValue);
             var kind = AlertNotifier.KindForVerdict(h.Verdict);
+            AlertMessage? custom = null;
+            // Остановленная служба вне операций оркестратора дольше льготного окна — это сбой (служба падает при старте,
+            // упал токен/Java и т.п.). Раньше Stopped считалось «намеренно» и молчало. Идёт по событию «сбой».
+            if (h.Verdict == HealthVerdict.Stopped)
+            {
+                if (!_stoppedSince.TryGetValue(svc, out var since)) _stoppedSince[svc] = since = DateTime.UtcNow;
+                if (DateTime.UtcNow - since >= StoppedGrace) { kind = AlertKind.Faulty; custom = ctx.Stopped(h, since); }
+            }
+            else _stoppedSince.Remove(svc);
 
             if (kind is { } k)
             {
@@ -77,13 +88,14 @@ public sealed class AlertWorker : BackgroundService
                 bool cooled = DateTime.UtcNow - prev.LastAlertUtc >= TimeSpan.FromMinutes(Math.Max(1, settings.CooldownMinutes));
                 if (settings.Enabled && settings.WantsKind(k) && (isNew || cooled))
                 {
-                    await Send(settings, ctx.Problem(h), svc, ct).ConfigureAwait(false);
+                    await Send(settings, custom ?? ctx.Problem(h), svc, ct).ConfigureAwait(false);
                     _state[svc] = (h.Verdict, DateTime.UtcNow);
                     continue;
                 }
             }
             else if (h.Verdict == HealthVerdict.Ok
-                     && AlertNotifier.KindForVerdict(prev.Verdict) is not null)   // был проблемный → стал Ok
+                     && (AlertNotifier.KindForVerdict(prev.Verdict) is not null
+                         || (prev.Verdict == HealthVerdict.Stopped && prev.LastAlertUtc != DateTime.MinValue)))   // был проблемный → стал Ok
             {
                 if (settings.Enabled && settings.OnRecovery)
                     await Send(settings, ctx.Recovery(h), svc, ct).ConfigureAwait(false);
@@ -155,6 +167,24 @@ public sealed class AlertContext
         {
             Machine = Machine, Utm = name, Service = h.Instance.ServiceName, Fsrar = fsrar, Port = h.Instance.Port,
             Reason = reason, Hint = AlertHints.Hint(kind), PanelUrl = PanelUrl, UtmUrl = UtmUrl(h),
+        };
+    }
+
+    /// <summary>УТМ остановлен дольше льготного окна и никто его не поднял.</summary>
+    public AlertMessage Stopped(InstanceHealth h, DateTime sinceUtc)
+    {
+        string name = UtmName(h);
+        string fsrar = h.Info?.OwnerId ?? h.Instance.ExpectedFsrar ?? "—";
+        int mins = (int)(DateTime.UtcNow - sinceUtc).TotalMinutes;
+        string reason = $"Служба не работает уже {mins} мин. Если она стартует и сразу останавливается — это падение при запуске (токен, Java, БД, порт).";
+        return new AlertMessage(AlertKind.Faulty,
+            $"🔴 УТМ «{name}» [{Machine}]: остановлен",
+            reason)
+        {
+            Machine = Machine, Utm = name, Service = h.Instance.ServiceName, Fsrar = fsrar, Port = h.Instance.Port,
+            Reason = reason,
+            Hint = "Откройте карточку УТМ в панели: «Поднять» / «Привязать токен». Если служба снова падает — нажмите «Диагностика (zip)» и пришлите архив. Если остановка намеренная, можно игнорировать.",
+            PanelUrl = PanelUrl, UtmUrl = UtmUrl(h),
         };
     }
 
