@@ -62,6 +62,16 @@ public sealed class EmailAlertChannel : IAlertChannel
                 TextBody = EmailHtml.RenderText(msg),
                 HtmlBody = EmailHtml.Render(msg),
             }.ToMessageBody();
+            if (msg.Attachments is { Count: > 0 })
+            {
+                var mp = new Multipart("mixed") { mime.Body };
+                foreach (var a in msg.Attachments)
+                {
+                    var ct2 = ContentType.Parse(a.MimeType);
+                    mp.Add(new MimePart(ct2) { Content = new MimeContent(new MemoryStream(a.Data)), ContentDisposition = new ContentDisposition(ContentDisposition.Attachment), ContentTransferEncoding = ContentEncoding.Base64, FileName = a.FileName });
+                }
+                mime.Body = mp;
+            }
 
             using var client = new SmtpClient();
             var secure = _s.UseSsl ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls;

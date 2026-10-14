@@ -103,6 +103,8 @@ public static class ServiceControl
     /// <summary>Запустить и дождаться Running (или таймаут). true, если Running.</summary>
     public static bool Start(string serviceName, TimeSpan timeout)
     {
+        // Самолечение: отравлённый список IP (Log4Shell-проба) роняет УТМ на старте — чистим до запуска.
+        try { UtmOrchestrator.Core.Diagnostics.UtmConfigSanitizer.SanitizeService(serviceName); } catch { }
         using var sc = new ServiceController(serviceName);
         sc.Refresh();
         if (sc.Status == ServiceControllerStatus.Running) return true;

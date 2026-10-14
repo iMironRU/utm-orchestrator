@@ -37,7 +37,11 @@ public sealed record AlertMessage(
     public DateTime When { get; init; } = DateTime.Now;
     /// <summary>Доп. строки «ключ → значение» (напр. включённые события в тесте).</summary>
     public IReadOnlyList<(string Key, string Value)>? Extra { get; init; }
+    /// <summary>Вложения (напр. диагностический zip УТМ). Email — как вложение, Telegram — sendDocument; MAX пока без файлов.</summary>
+    public IReadOnlyList<AlertAttachment>? Attachments { get; init; }
 }
+
+public sealed record AlertAttachment(string FileName, byte[] Data, string MimeType = "application/zip");
 
 /// <summary>Канал доставки уведомления (Email/Telegram/MAX/…). Реализации не кидают — возвращают ошибку текстом.</summary>
 public interface IAlertChannel

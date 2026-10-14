@@ -76,7 +76,20 @@ public sealed class TelegramAlertChannel : IAlertChannel
                 new KeyValuePair<string, string>("disable_web_page_preview", "true"),
             });
             var resp = await h.PostAsync($"https://api.telegram.org/bot{token}/sendMessage", form, ct).ConfigureAwait(false);
-            if (resp.IsSuccessStatusCode) return null;
+            if (resp.IsSuccessStatusCode) {
+                // Вложения (диагностический zip) — отдельными sendDocument после текста
+                if (msg.Attachments is { Count: > 0 })
+                    foreach (var a in msg.Attachments)
+                    {
+                        using var mp = new MultipartFormDataContent();
+                        mp.Add(new StringContent(_s.ChatId!), "chat_id");
+                        var fc = new ByteArrayContent(a.Data); fc.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(a.MimeType);
+                        mp.Add(fc, "document", a.FileName);
+                        var dr = await h.PostAsync($"https://api.telegram.org/bot{token}/sendDocument", mp, ct).ConfigureAwait(false);
+                        if (!dr.IsSuccessStatusCode) return $"telegram: текст отправлен, вложение не ушло: HTTP {(int)dr.StatusCode}";
+                    }
+                return null;
+            }
             string body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
             return $"telegram: HTTP {(int)resp.StatusCode} {body}".Trim();
         }

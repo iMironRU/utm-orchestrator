@@ -1,4 +1,5 @@
 using UtmOrchestrator.Core.Alerts;
+using UtmOrchestrator.Core.Diagnostics;
 using UtmOrchestrator.Core.Discovery;
 using UtmOrchestrator.Core.Health;
 using UtmOrchestrator.Core.State;
@@ -64,8 +65,31 @@ public sealed class AlertWorker : BackgroundService
         if (BringUpStatus.Active) return;                 // идёт операция — не шлём транзиентные сбои
 
         var instances = await UtmDiscovery.DiscoverAsync(ct).ConfigureAwait(false);
+        // Самолечение отравлённого transport.properties (Log4Shell-проба в списке IP роняет УТМ на старте).
+        // Дёшево: быстрый выход, если «${» в конфиге нет. Лечим ДО проверки здоровья.
+        var healed = new List<(UtmInstance Inst, UtmConfigSanitizer.Result Res)>();
+        foreach (var inst in instances)
+        {
+            var r = UtmConfigSanitizer.SanitizeFolder(inst.FolderPath);
+            if (r is null) continue;
+            healed.Add((inst, r));
+            _log.LogWarning("Самолечение {Svc}: из transport.properties удалено {N} вредоносных элементов IP-списка ({Items})",
+                inst.ServiceName, r.Removed, string.Join(" | ", r.Items.Select(i => i.Length > 60 ? i[..60] + "…" : i)));
+            // служба, упавшая из-за этого, сама не поднимется — поднимаем (старт и так чистит конфиг)
+            if (OperatingSystem.IsWindows()
+                && UtmOrchestrator.Core.Services.ServiceControl.GetState(inst.ServiceName) == UtmOrchestrator.Core.Services.ServiceState.Stopped)
+            {
+                var name = inst.ServiceName;
+                _ = Task.Run(() => { try { UtmOrchestrator.Core.Services.ServiceControl.Start(name, TimeSpan.FromSeconds(90)); } catch { } });
+            }
+        }
+
         var health = await checker.CheckAsync(instances, ct).ConfigureAwait(false);
         var ctx = AlertContext.Build(_names);
+
+        foreach (var (inst, res) in healed)
+            if (settings.Enabled && settings.OnRecovery)
+                await Send(settings, ctx.SelfHealed(inst, res), inst.ServiceName, ct).ConfigureAwait(false);
 
         foreach (var h in health)
         {
@@ -88,7 +112,7 @@ public sealed class AlertWorker : BackgroundService
                 bool cooled = DateTime.UtcNow - prev.LastAlertUtc >= TimeSpan.FromMinutes(Math.Max(1, settings.CooldownMinutes));
                 if (settings.Enabled && settings.WantsKind(k) && (isNew || cooled))
                 {
-                    await Send(settings, custom ?? ctx.Problem(h), svc, ct).ConfigureAwait(false);
+                    await Send(settings, await WithDiag(custom ?? ctx.Problem(h), h, ct), svc, ct).ConfigureAwait(false);
                     _state[svc] = (h.Verdict, DateTime.UtcNow);
                     continue;
                 }
@@ -103,6 +127,18 @@ public sealed class AlertWorker : BackgroundService
 
             _state[svc] = (h.Verdict, _state.TryGetValue(svc, out var s2) ? s2.LastAlertUtc : DateTime.MinValue);
         }
+    }
+
+    /// <summary>Прикладывает к сообщению о сбое диагностический zip этого УТМ (логи, конфиг без секретов, состояние службы).</summary>
+    private async Task<AlertMessage> WithDiag(AlertMessage msg, InstanceHealth h, CancellationToken ct)
+    {
+        try
+        {
+            var i = h.Instance;
+            var bytes = await Task.Run(() => DiagBundle.Build(i.ServiceName, i.FolderPath, i.Port, i.ExpectedFsrar, i.TokenSerial), ct).ConfigureAwait(false);
+            return msg with { Attachments = new[] { new AlertAttachment(DiagBundle.FileName(i.ServiceName), bytes) } };
+        }
+        catch (Exception e) { _log.LogWarning(e, "Диагностика для вложения не собрана ({Svc})", h.Instance.ServiceName); return msg; }
     }
 
     private async Task Send(AlertSettings settings, AlertMessage msg, string svc, CancellationToken ct)
@@ -148,6 +184,8 @@ public sealed class AlertContext
 
     private string UtmName(InstanceHealth h) => _names.Get(h.Instance.TokenSerial) ?? h.Instance.ServiceName;
 
+    private string? UtmUrl2(UtmInstance i) => LanIp is null ? null : $"http://{LanIp}:{(_extPorts.TryGetValue(i.ServiceName, out var ep) ? ep : i.Port)}/";
+
     private string? UtmUrl(InstanceHealth h)
     {
         if (LanIp is null) return null;
@@ -185,6 +223,20 @@ public sealed class AlertContext
             Reason = reason,
             Hint = "Откройте карточку УТМ в панели: «Поднять» / «Привязать токен». Если служба снова падает — нажмите «Диагностика (zip)» и пришлите архив. Если остановка намеренная, можно игнорировать.",
             PanelUrl = PanelUrl, UtmUrl = UtmUrl(h),
+        };
+    }
+
+    /// <summary>Оркестратор сам вылечил конфиг УТМ (убрал Log4Shell-пробу из списка IP).</summary>
+    public AlertMessage SelfHealed(UtmInstance inst, UtmConfigSanitizer.Result r)
+    {
+        string name = _names.Get(inst.TokenSerial) ?? inst.ServiceName;
+        string reason = $"Из transport.properties удалено {r.Removed} вредоносных элементов списка IP (пробы сканера Log4Shell: «${{jndi:ldap://…}}»). " +
+                        "Из-за них УТМ падал на старте. Копия прежнего файла: transport.properties.bak_poison. Остановленная служба запущена.";
+        return new AlertMessage(AlertKind.Recovery, $"🟢 УТМ «{name}» [{Machine}]: конфиг вылечен автоматически", reason)
+        {
+            Machine = Machine, Utm = name, Service = inst.ServiceName, Fsrar = inst.ExpectedFsrar, Port = inst.Port, Reason = reason,
+            Hint = "Порт УТМ открыт в интернет, и его сканируют — список может отравиться снова (оркестратор вычистит). Лучше закрыть внешний порт на роутере или ограничить адресами ФСРАР и учётной системы.",
+            PanelUrl = PanelUrl, UtmUrl = UtmUrl2(inst),
         };
     }
 
