@@ -7,7 +7,7 @@ namespace UtmOrchestrator.Core.Diagnostics;
 /// Самолечение «отравленного» transport.properties. Сканеры шлют УТМ заголовок X-Forwarded-For с
 /// Log4Shell-пробой («${jndi:ldap://…${hostName}…}»), УТМ сохраняет его в список web.server.attempt.ip,
 /// а на старте Spring принимает «${…}» за подстановку, не может её разрешить и роняет Tomcat — служба
-/// стартует и сразу останавливается. Вычищаем из IP-списков всё, что не похоже на адрес.
+/// стартует и сразу останавливается. Если журнал web.server.attempt.ip содержит не-адреса, сбрасываем его, оставляя только разрешённые (web.server.access.ip).
 /// </summary>
 public static class UtmConfigSanitizer
 {
@@ -49,30 +49,37 @@ public static class UtmConfigSanitizer
         {
             if (!File.Exists(path)) return null;
             string text = File.ReadAllText(path, Encoding.UTF8);
-            if (!text.Contains("${", StringComparison.Ordinal)) return null;   // быстрый выход: здоровый конфиг
-
             bool crlf = text.Contains("\r\n");
             var lines = text.Replace("\r\n", "\n").Split('\n');
-            var removed = new List<string>();
+
+            int attemptIdx = -1;
+            var access = new List<string>();
             for (int i = 0; i < lines.Length; i++)
             {
-                if (!IpKey.IsMatch(lines[i])) continue;
-                int eq = lines[i].IndexOf('=');
-                var keep = new List<string>();
-                foreach (var raw in lines[i][(eq + 1)..].Split(','))
-                {
-                    string item = raw.Trim();
-                    if (item.Length == 0) continue;
-                    if (IpItem.IsMatch(item)) keep.Add(item);
-                    else removed.Add(item.Length > 120 ? item[..120] + "…" : item);
-                }
-                if (removed.Count > 0) lines[i] = lines[i][..(eq + 1)] + " " + string.Join(",", keep);
+                var m = IpKey.Match(lines[i]);
+                if (!m.Success) continue;
+                string val = lines[i][(lines[i].IndexOf('=') + 1)..];
+                if (m.Groups[1].Value.Equals("attempt", StringComparison.OrdinalIgnoreCase)) attemptIdx = i;
+                else access.AddRange(val.Split(',').Select(s => s.Trim()).Where(s => s.Length > 0 && IpItem.IsMatch(s)));
             }
-            if (removed.Count == 0) return null;
+            if (attemptIdx < 0) return null;
+
+            // Журнал попыток отравлен, если в нём есть что-то кроме адресов (в т.ч. «${jndi:…}»).
+            int eq = lines[attemptIdx].IndexOf('=');
+            var items = lines[attemptIdx][(eq + 1)..].Split(',').Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+            var bad = items.Where(s => !IpItem.IsMatch(s)).ToList();
+            if (bad.Count == 0) return null;
+
+            // Лечение: attempt.ip — только журнал отклонённых попыток. Оставляем в нём лишь разрешённые адреса
+            // (web.server.access.ip), всё остальное сбрасываем — так же, как вручную.
+            var keep = items.Where(s => access.Contains(s)).Distinct().ToList();
+            lines[attemptIdx] = lines[attemptIdx][..(eq + 1)] + " " + string.Join(",", keep);
 
             File.Copy(path, path + ".bak_poison", overwrite: true);
             File.WriteAllText(path, string.Join(crlf ? "\r\n" : "\n", lines), new UTF8Encoding(false));
-            return new Result(removed.Count, removed, path);
+            var shown = bad.Where(s => s.Contains("${") || s.Contains("jndi", StringComparison.OrdinalIgnoreCase)).DefaultIfEmpty(bad[0])
+                           .Select(s => s.Length > 120 ? s[..120] + "…" : s).Take(5).ToList();
+            return new Result(bad.Count, shown, path);
         }
         catch { return null; }
     }

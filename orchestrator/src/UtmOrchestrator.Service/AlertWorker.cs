@@ -77,6 +77,7 @@ public sealed class AlertWorker : BackgroundService
             healed.Add((inst, r));
             _log.LogWarning("Самолечение {Svc}: из transport.properties удалено {N} вредоносных элементов IP-списка ({Items})",
                 inst.ServiceName, r.Removed, string.Join(" | ", r.Items.Select(i => i.Length > 60 ? i[..60] + "…" : i)));
+            ReaderOp.FileLog($"самолечение {inst.ServiceName}: transport.properties — сброшен журнал web.server.attempt.ip, удалено нетипичных элементов: {r.Removed} (бэкап .bak_poison)");
             // служба, упавшая из-за этого, сама не поднимется — поднимаем (старт и так чистит конфиг)
             if (OperatingSystem.IsWindows()
                 && UtmOrchestrator.Core.Services.ServiceControl.GetState(inst.ServiceName) == UtmOrchestrator.Core.Services.ServiceState.Stopped)
@@ -219,6 +220,26 @@ public sealed class AlertContext
         };
     }
 
+    /// <summary>Причина падения из daemon-error.log самого УТМ (последняя строка с ошибкой) — чтобы письмо сразу говорило, что сломалось.</summary>
+    private static string? LogCause(string? folder)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(folder)) return null;
+            string p = Path.Combine(folder, "transporter", "l", "daemon-error.log");
+            if (!File.Exists(p)) return null;
+            using var fs = new FileStream(p, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            long start = Math.Max(0, fs.Length - 64 * 1024); fs.Seek(start, SeekOrigin.Begin);
+            string tail = new StreamReader(fs).ReadToEnd();
+            var m = System.Text.RegularExpressions.Regex.Matches(tail, @"Could not resolve placeholder '([^']+)' in value ""([^""]{0,160})");
+            if (m.Count > 0)
+                return $"в конфиге есть неразрешимая подстановка «${{{m[^1].Groups[1].Value}}}» в значении «{m[^1].Groups[2].Value}…» (отравленный список IP, пробы Log4Shell)";
+            var line = tail.Split('\n').LastOrDefault(l => l.Contains("Exception") || l.Contains("ERROR") || l.Contains("Error"));
+            return line is null ? null : (line.Trim().Length > 220 ? line.Trim()[..220] + "…" : line.Trim());
+        }
+        catch { return null; }
+    }
+
     /// <summary>УТМ остановлен дольше льготного окна и никто его не поднял.</summary>
     public AlertMessage Stopped(InstanceHealth h, DateTime sinceUtc)
     {
@@ -226,6 +247,8 @@ public sealed class AlertContext
         string fsrar = h.Info?.OwnerId ?? h.Instance.ExpectedFsrar ?? "—";
         int mins = (int)(DateTime.UtcNow - sinceUtc).TotalMinutes;
         string reason = $"Служба не работает уже {mins} мин. Если она стартует и сразу останавливается — это падение при запуске (токен, Java, БД, порт).";
+        string? cause = LogCause(h.Instance.FolderPath);
+        if (cause is not null) reason += "\nПричина из лога УТМ: " + cause + ".";
         return new AlertMessage(AlertKind.Faulty,
             $"🔴 УТМ «{name}» [{Machine}]: остановлен",
             reason)
@@ -241,7 +264,7 @@ public sealed class AlertContext
     public AlertMessage SelfHealed(UtmInstance inst, UtmConfigSanitizer.Result r)
     {
         string name = _names.Get(inst.TokenSerial) ?? inst.ServiceName;
-        string reason = $"Из transport.properties удалено {r.Removed} вредоносных элементов списка IP (пробы сканера Log4Shell: «${{jndi:ldap://…}}»). " +
+        string reason = $"В transport.properties сброшен журнал web.server.attempt.ip (в нём было {r.Removed} нетипичных элементов — пробы (Log4Shell: «${{jndi:ldap://…}}»). " +
                         "Из-за них УТМ падал на старте. Копия прежнего файла: transport.properties.bak_poison. Остановленная служба запущена.";
         return new AlertMessage(AlertKind.Recovery, $"🟢 УТМ «{name}» [{Machine}]: конфиг вылечен автоматически", reason)
         {
