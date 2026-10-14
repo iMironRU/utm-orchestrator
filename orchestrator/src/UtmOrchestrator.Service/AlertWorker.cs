@@ -19,9 +19,9 @@ public sealed class AlertWorker : BackgroundService
     private readonly TimeSpan _interval;
     private readonly Dictionary<string, (HealthVerdict Verdict, DateTime LastAlertUtc)> _state = new();
     private readonly Dictionary<string, DateTime> _stoppedSince = new();
-    private static readonly TimeSpan StoppedGrace = TimeSpan.FromMinutes(3);   // дольше — не «операция», а сбой
+    private static readonly TimeSpan StoppedGrace = TimeSpan.FromMinutes(10);   // дольше — не «операция», а сбой
     private readonly Dictionary<string, DateTime> _unreachableSince = new();
-    private static readonly TimeSpan UnreachableGrace = TimeSpan.FromMinutes(3);   // «не отвечает по HTTP» короче — перезапуск/загрузка, не сбой
+    private static readonly TimeSpan UnreachableGrace = TimeSpan.FromMinutes(10);   // «не отвечает по HTTP» короче — перезапуск/загрузка, не сбой
 
     public AlertWorker(ILogger<AlertWorker> log, IConfiguration config, NameStore names)
     {
