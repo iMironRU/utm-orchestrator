@@ -982,6 +982,7 @@
       '<button data-action="openUtmWeb" data-port="' + esc(sel.port) + '" style="' + btnGhost(c) + '">Открыть УТМ ↗</button>' +
       '<button data-action="openLogsFor" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnGhost(c) + '">Логи УТМ</button>' +
       '<button data-action="queryUnprocessed" data-service="' + esc(sel.service) + '" data-name="' + esc(sel.name) + '" style="' + btnGhost(c) + '">Запросить накладные</button>' +
+      '<button data-action="diagBundle" data-service="' + esc(sel.service) + '" title="Скачать zip с логами, конфигом (без PIN) и состоянием службы — для разбора, почему УТМ не стартует" style="' + btnGhost(c) + '">Диагностика (zip)</button>' +
       // Профилактика: изолировать GOST-библиотеку (своя копия DLL) — против интермиттент CKR
       // при нескольких УТМ на одной машине. Скрываем, когда уже показан реактивный баннер CKR.
       ((sel.status === 'stopped' || (sel.signing && sel.signing.errorClass === 'CryptoLib')) ? '' :
@@ -2810,6 +2811,17 @@
 
     /* Изолировать GOST-библиотеку для одного УТМ: своя копия DLL (против интермиттент CKR
        при нескольких УТМ на машине). Правит конфиг + перезапускает только этот УТМ. */
+    /* Диагностический архив: логи УТМ, конфиг без секретов, состояние службы и события Windows. */
+    diagBundle: function (el) {
+      var service = el.getAttribute('data-service');
+      if (!service) return;
+      showToast('Собираю диагностику… архив скачается сам (до ~30 с)');
+      var a = document.createElement('a');
+      a.href = '/api/utm/diag?service=' + encodeURIComponent(service);
+      a.download = '';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    },
+
     gostIsolate: function (el) {
       var service = el.getAttribute('data-service');
       var name = el.getAttribute('data-name') || service;
