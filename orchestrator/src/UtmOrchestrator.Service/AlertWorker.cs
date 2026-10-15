@@ -23,12 +23,47 @@ public sealed class AlertWorker : BackgroundService
     private readonly Dictionary<string, DateTime> _unreachableSince = new();
     private static readonly TimeSpan UnreachableGrace = TimeSpan.FromMinutes(10);   // «не отвечает по HTTP» короче — перезапуск/загрузка, не сбой
 
+    // Состояние уведомлений переживает перезапуск службы (обновление оркестратора, ребут): иначе после рестарта
+    // «был сбой → стало хорошо» не опознаётся и письмо «вернулся в норму» не приходит.
+    private static string StatePath => UtmOrchestrator.Core.AppPaths.Data("alert-state.json");
+    private string _savedState = "";
+
+    private void LoadState()
+    {
+        try
+        {
+            if (!File.Exists(StatePath)) return;
+            var raw = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, PersistedState>>(File.ReadAllText(StatePath));
+            if (raw is null) return;
+            foreach (var (svc, p) in raw)
+                if (Enum.TryParse<HealthVerdict>(p.Verdict, out var v)) _state[svc] = (v, p.LastAlertUtc);
+            _savedState = File.ReadAllText(StatePath);
+        }
+        catch { /* битый файл — начнём с чистого состояния */ }
+    }
+
+    private void SaveState()
+    {
+        try
+        {
+            var raw = _state.ToDictionary(kv => kv.Key, kv => new PersistedState(kv.Value.Verdict.ToString(), kv.Value.LastAlertUtc));
+            string json = System.Text.Json.JsonSerializer.Serialize(raw);
+            if (json == _savedState) return;               // пишем только при изменении
+            File.WriteAllText(StatePath, json);
+            _savedState = json;
+        }
+        catch { }
+    }
+
+    private sealed record PersistedState(string Verdict, DateTime LastAlertUtc);
+
     public AlertWorker(ILogger<AlertWorker> log, IConfiguration config, NameStore names)
     {
         _log = log;
         _names = names;
         int sec = config.GetValue("AlertCheckIntervalSeconds", 60);
         _interval = TimeSpan.FromSeconds(Math.Max(20, sec));
+        LoadState();
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -139,6 +174,7 @@ public sealed class AlertWorker : BackgroundService
             _state[svc] = (h.Verdict, h.Verdict == HealthVerdict.Ok ? DateTime.MinValue   // норма — сбрасываем: следующая проблема уведомит сразу
                 : _state.TryGetValue(svc, out var s2) ? s2.LastAlertUtc : DateTime.MinValue);
         }
+        SaveState();
     }
 
     /// <summary>Прикладывает к сообщению о сбое диагностический zip этого УТМ (логи, конфиг без секретов, состояние службы).</summary>
